@@ -4,7 +4,12 @@ export const runtime = "nodejs";
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function GET(_req: Request) {
-  return new Response("Slack Interactivity API is running 🚀", { status: 200 });
+  return new Response("Slack Interactivity API is running 🚀", {
+    status: 200,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+    },
+  });
 }
 
 export async function POST(req: Request) {
