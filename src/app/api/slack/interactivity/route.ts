@@ -1,6 +1,6 @@
 import { verifySlackRequest } from "@/lib/slack/verify";
 import { callSlackApi } from "@/lib/slack/slackApi";
-import { postIssueComment } from "@/lib/github/issues";
+import { postIssueComment } from "@/lib/github/issue";
 
 export const runtime = "nodejs";
 
