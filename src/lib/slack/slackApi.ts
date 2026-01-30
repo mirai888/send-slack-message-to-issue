@@ -1,0 +1,19 @@
+export async function callSlackApi(method: string, body: unknown) {
+  const res = await fetch(`https://slack.com/api/${method}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const json = await res.json();
+
+  if (!json.ok) {
+    console.error("Slack API error:", json);
+    throw new Error(`Slack API error: ${method}`);
+  }
+
+  return json;
+}

@@ -1,67 +1,89 @@
-import crypto from "crypto";
+import { verifySlackRequest } from "@/lib/slack/verify";
+import { callSlackApi } from "@/lib/slack/slackApi";
+import { postIssueComment } from "@/lib/github/issues";
 
 export const runtime = "nodejs";
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export async function GET(_req: Request) {
-  return new Response("Slack Interactivity API is running 🚀", {
-    status: 200,
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-    },
-  });
-}
 
 export async function POST(req: Request) {
   const rawBody = await req.text();
 
-  // --- 署名検証（最低限） ---
-  if (!verifySlack(req, rawBody)) {
+  if (!verifySlackRequest(req, rawBody)) {
     return new Response("invalid signature", { status: 401 });
   }
 
   const params = new URLSearchParams(rawBody);
   const payload = JSON.parse(params.get("payload") || "{}");
 
-  // Message Shortcut が押された
-  if (
-    payload.type === "message_action" &&
-    payload.callback_id === "send_to_github_issue"
-  ) {
-    const text = payload.message?.text ?? "";
-    const user = payload.user?.username ?? payload.user?.id;
-    const channel = payload.channel?.name ?? payload.channel?.id;
-
-    const body = formatIssueComment({
-      text,
-      user,
-      channel,
-    });
-
-    // GitHub Issue に即コメント
-    await postIssueComment(body);
-
-    // Slackには即ACK
+  // ① Message Action → モーダル
+  if (payload.type === "message_action") {
+    await openIssueSelectModal(payload);
     return new Response("", { status: 200 });
+  }
+
+  // ② モーダル送信 → Issue投稿
+  if (payload.type === "view_submission") {
+    await handleSubmit(payload);
+    return new Response(
+      JSON.stringify({ response_action: "clear" }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
   }
 
   return new Response("", { status: 200 });
 }
 
-/* ---------------- helpers ---------------- */
+/* ---------- handlers ---------- */
 
-function verifySlack(req: Request, rawBody: string) {
-  const ts = req.headers.get("x-slack-request-timestamp");
-  const sig = req.headers.get("x-slack-signature");
-  if (!ts || !sig) return false;
+async function openIssueSelectModal(payload: any) {
+  const meta = {
+    text: payload.message.text ?? "",
+    user: payload.user.username ?? payload.user.id,
+    channel: payload.channel.name ?? payload.channel.id,
+  };
 
-  const base = `v0:${ts}:${rawBody}`;
-  const hmac = crypto
-    .createHmac("sha256", process.env.SLACK_SIGNING_SECRET!)
-    .update(base)
-    .digest("hex");
+  await callSlackApi("views.open", {
+    trigger_id: payload.trigger_id,
+    view: {
+      type: "modal",
+      callback_id: "select_issue_modal",
+      private_metadata: JSON.stringify(meta),
+      title: { type: "plain_text", text: "Send to Issue" },
+      submit: { type: "plain_text", text: "Send" },
+      close: { type: "plain_text", text: "Cancel" },
+      blocks: [
+        {
+          type: "input",
+          block_id: "issue",
+          label: { type: "plain_text", text: "GitHub Issue" },
+          element: {
+            type: "external_select",
+            action_id: "issue_select",
+            placeholder: {
+              type: "plain_text",
+              text: "番号 or タイトルで検索",
+            },
+            min_query_length: 1,
+          },
+        },
+      ],
+    },
+  });
+}
 
-  return `v0=${hmac}` === sig;
+async function handleSubmit(payload: any) {
+  const state = payload.view.state.values;
+  const issueNumber =
+    state.issue.issue_select.selected_option.value;
+
+  const meta = JSON.parse(payload.view.private_metadata);
+
+  const body = formatIssueComment({
+    text: meta.text,
+    user: meta.user,
+    channel: meta.channel,
+  });
+
+  await postIssueComment(issueNumber, body);
 }
 
 function formatIssueComment({
@@ -86,25 +108,4 @@ function formatIssueComment({
 
 ${quoted || "> （本文なし）"}
 `.trim();
-}
-
-async function postIssueComment(body: string) {
-  const res = await fetch(
-    `https://api.github.com/repos/${process.env.GITHUB_OWNER}/${process.env.GITHUB_REPO}/issues/2813/comments`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ body }),
-    }
-  );
-
-  if (!res.ok) {
-    const text = await res.text();
-    console.error("GitHub error:", text);
-    throw new Error("Failed to post comment");
-  }
 }
