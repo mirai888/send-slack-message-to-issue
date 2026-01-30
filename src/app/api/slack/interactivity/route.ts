@@ -2,6 +2,10 @@ import crypto from "crypto";
 
 export const runtime = "nodejs";
 
+export async function GET(req: Request) {
+  return new Response("Slack Interactivity API is running 🚀", { status: 200 });
+}
+
 export async function POST(req: Request) {
   const rawBody = await req.text();
 
