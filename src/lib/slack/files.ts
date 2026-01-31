@@ -1,5 +1,4 @@
 import { put } from "@vercel/blob";
-import { callSlackApi } from "./slackApi";
 
 interface SlackFile {
   id?: string;
@@ -36,47 +35,14 @@ export async function downloadAndStoreSlackFile(
     throw new Error(`SLACK_BOT_TOKEN must start with 'xoxb-' (Bot Token), got: ${tokenPrefix}...`);
   }
 
-  // files.info APIでファイル情報を取得して、正しいURLを取得
-  let downloadUrl: string;
-  let finalMimetype = mimetype;
-
-  if (file.id) {
-    try {
-      console.log(`[Slack File] Getting file info for ID: ${file.id}`);
-      const result = await callSlackApi("files.info", {
-        file: file.id,
-      });
-
-      console.log(`[Slack File] files.info response:`, {
-        hasFile: !!result.file,
-        urlPrivateDownload: !!result.file?.url_private_download,
-        urlPrivate: !!result.file?.url_private,
-      });
-
-      downloadUrl = result.file?.url_private_download ?? result.file?.url_private;
-      finalMimetype = result.file?.mimetype ?? mimetype;
-
-      if (!downloadUrl) {
-        throw new Error(`No download URL in files.info response`);
-      }
-
-      console.log(`[Slack File] Got URL from files.info: ${downloadUrl.substring(0, 50)}...`);
-    } catch (e) {
-      console.error(`[Slack File] files.info failed:`, e);
-      // フォールバック: payloadから取得したURLを使用
-      downloadUrl = file.url_private_download ?? file.url_private ?? "";
-      if (!downloadUrl) {
-        throw new Error(`No download URL for file: ${filename}`);
-      }
-      console.log(`[Slack File] Falling back to URL from payload: ${downloadUrl.substring(0, 50)}...`);
-    }
-  } else {
-    downloadUrl = file.url_private_download ?? file.url_private ?? "";
-    if (!downloadUrl) {
-      throw new Error(`No download URL for file: ${filename}`);
-    }
-    console.log(`[Slack File] Using URL from payload: ${downloadUrl.substring(0, 50)}...`);
+  // url_private_download を直接使用（Bearer認証必須）
+  const downloadUrl = file.url_private_download ?? file.url_private;
+  
+  if (!downloadUrl) {
+    throw new Error(`No download URL for file: ${filename}`);
   }
+
+  console.log(`[Slack File] Using URL from payload: ${downloadUrl.substring(0, 50)}...`);
 
   console.log(`[Slack File] Downloading: ${filename} from ${downloadUrl.substring(0, 50)}...`);
 
@@ -98,7 +64,11 @@ export async function downloadAndStoreSlackFile(
     const text = await res.text();
     console.error(`[Slack File] Slack returned HTML instead of file:`, text.substring(0, 200));
     throw new Error(
-      `Slack returned HTML instead of file (${filename}): ${text.substring(0, 200)}`
+      `Slack returned HTML instead of file (${filename}). This usually means:\n` +
+      `1. The 'files:read' scope is not set in your Slack App\n` +
+      `2. The app needs to be reinstalled after adding the scope\n` +
+      `3. The Bot Token does not have permission to access this file\n` +
+      `Response: ${text.substring(0, 200)}`
     );
   }
 
@@ -107,7 +77,7 @@ export async function downloadAndStoreSlackFile(
 
   console.log(`[Slack File] Downloaded ${buffer.length} bytes`);
 
-  const finalMimetypeForReturn = finalMimetype ?? mimetype ?? "application/octet-stream";
+  const finalMimetypeForReturn = mimetype ?? "application/octet-stream";
 
   const blob = await put(`slack/${Date.now()}-${filename}`, buffer, {
     access: "public",
