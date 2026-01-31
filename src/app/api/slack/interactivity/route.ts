@@ -1,10 +1,55 @@
 import { verifySlackRequest } from "@/lib/slack/verify";
 import { callSlackApi } from "@/lib/slack/slackApi";
-import { downloadAndStoreSlackFile } from "@/lib/slack/files";
 import { postIssueComment } from "@/lib/github/issue";
 import { formatAttachments } from "@/lib/github/formatAttachments";
+import { uploadSlackFileToGitHub } from "@/lib/github/uploadAsset";
 
 export const runtime = "nodejs";
+
+// Slack Interactivity payload の型定義
+interface SlackFile {
+  id?: string;
+  name?: string;
+  mimetype?: string;
+  url_private_download?: string;
+  url_private?: string;
+}
+
+interface SlackMessageActionPayload {
+  type: "message_action";
+  trigger_id: string;
+  message: {
+    text?: string;
+    files?: SlackFile[];
+  };
+  user: {
+    id: string;
+    username?: string;
+  };
+  channel: {
+    id: string;
+    name?: string;
+  };
+}
+
+interface SlackViewSubmissionPayload {
+  type: "view_submission";
+  view: {
+    state: {
+      values: {
+        issue: {
+          issue_select: {
+            selected_option: {
+              value: string;
+            };
+          };
+        };
+      };
+    };
+    private_metadata: string;
+  };
+}
+
 
 export async function POST(req: Request) {
   const rawBody = await req.text();
@@ -40,9 +85,9 @@ export async function POST(req: Request) {
 
 /* ---------- handlers ---------- */
 
-async function openIssueSelectModal(payload: any) {
+async function openIssueSelectModal(payload: SlackMessageActionPayload) {
   // private_metadataは3000文字制限があるため、最小限の情報のみ保存
-  const files = (payload.message.files ?? []).map((file: any) => ({
+  const files = (payload.message.files ?? []).map((file: SlackFile) => ({
     id: file.id,
     name: file.name,
     mimetype: file.mimetype,
@@ -63,10 +108,12 @@ async function openIssueSelectModal(payload: any) {
   if (metadataJson.length > 3000) {
     console.warn(`[Interactivity] private_metadata is too long: ${metadataJson.length} chars. Truncating files.`);
     // ファイル情報をさらに最小限に（idとnameだけ）
-    const minimalFiles = (payload.message.files ?? []).map((file: any) => ({
+    const minimalFiles = (payload.message.files ?? []).map((file: SlackFile) => ({
       id: file.id,
       name: file.name,
       mimetype: file.mimetype,
+      url_private_download: undefined,
+      url_private: undefined,
     }));
     meta.files = minimalFiles;
   }
@@ -100,23 +147,28 @@ async function openIssueSelectModal(payload: any) {
   });
 }
 
-async function handleSubmit(payload: any) {
+async function handleSubmit(payload: SlackViewSubmissionPayload) {
   const state = payload.view.state.values;
   const issueNumber =
     state.issue.issue_select.selected_option.value;
 
   const meta = JSON.parse(payload.view.private_metadata);
 
-  // 添付ファイル処理
+  // 添付ファイル処理（GitHubに直接アップロード）
   const slackFiles = meta.files ?? [];
-  console.log(`[Interactivity] Processing ${slackFiles.length} files`);
+  console.log(`[Interactivity] Processing ${slackFiles.length} files for issue #${issueNumber}`);
 
   const uploadedFiles: Array<{
     filename: string;
     url: string;
     mimetype: string;
   }> = [];
+  const uploadErrors: Array<{
+    filename: string;
+    reason: string;
+  }> = [];
 
+  // ファイルごとに try/catch し、1つ失敗しても他は続行する
   for (const file of slackFiles) {
     try {
       // url_private_downloadがない場合は、Slack APIからファイル情報を再取得
@@ -127,18 +179,43 @@ async function handleSubmit(payload: any) {
         fileInfo = fileResponse.file;
       }
 
-      const uploaded = await downloadAndStoreSlackFile(fileInfo);
-      uploadedFiles.push(uploaded);
+      // GitHubに直接アップロード（Vercel Blobは使用しない）
+      const result = await uploadSlackFileToGitHub(fileInfo, issueNumber);
+
+      if ("url" in result) {
+        // アップロード成功
+        uploadedFiles.push({
+          filename: result.filename,
+          url: result.url,
+          mimetype: result.mimetype,
+        });
+        console.log(`[Interactivity] Successfully uploaded ${result.filename}`);
+      } else {
+        // アップロード失敗（サイズ超過、未サポートファイル種別など）
+        uploadErrors.push({
+          filename: result.filename,
+          reason: result.reason,
+        });
+        console.warn(`[Interactivity] Skipped ${result.filename}: ${result.reason}`);
+      }
     } catch (e) {
-      console.error("file upload failed", file.name || file.id, e);
+      const filename = file.name || file.id || "unknown";
+      const errorMessage = e instanceof Error ? e.message : "Unknown error";
+      console.error(`[Interactivity] File upload failed: ${filename}`, e);
+      uploadErrors.push({
+        filename,
+        reason: errorMessage,
+      });
     }
   }
 
+  // Issueコメント本文を生成
   const body = formatIssueComment({
     text: meta.text,
     user: meta.user,
     channel: meta.channel,
     attachments: formatAttachments(uploadedFiles),
+    errors: uploadErrors,
   });
 
   await postIssueComment(issueNumber, body);
@@ -149,16 +226,29 @@ function formatIssueComment({
   user,
   channel,
   attachments,
+  errors,
 }: {
   text: string;
   user: string;
   channel: string;
   attachments: string;
+  errors?: Array<{ filename: string; reason: string }>;
 }) {
   const quoted = text
     .split("\n")
     .map((l) => `> ${l}`)
     .join("\n");
+
+  let errorSection = "";
+  if (errors && errors.length > 0) {
+    const errorLines = errors.map(
+      (e) => `- \`${e.filename}\`: ${e.reason}`
+    );
+    errorSection = `
+### ⚠️ アップロードできなかったファイル
+${errorLines.join("\n")}
+`;
+  }
 
   return `
 ## Slackから共有 🧵
@@ -168,5 +258,6 @@ function formatIssueComment({
 
 ${quoted || "> （本文なし）"}
 ${attachments}
+${errorSection}
 `.trim();
 }
