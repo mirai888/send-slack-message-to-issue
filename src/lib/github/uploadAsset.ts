@@ -11,7 +11,7 @@
  * 5. 返されたURLを返す
  */
 
-import { downloadSlackFile, DownloadedFile } from "@/lib/slack/downloadFile";
+import { downloadSlackFile } from "@/lib/slack/downloadFile";
 import {
   getRepositoryId,
   getIssueId,
@@ -65,119 +65,12 @@ function isSupportedFileType(mimetype: string): boolean {
 }
 
 /**
- * GitHub S3にファイルをアップロード
+ * ファイルをbase64エンコード
  * 
- * GitHubのIssueコメントアセットアップロードの流れ:
- * 1. GitHub REST APIでアセットアップロード用の署名付きURLを取得
- * 2. そのURLにPUTリクエストでファイルをアップロード
- * 3. アップロードされたURLを使用してuploadIssueCommentAsset mutationを実行
- * 
- * 実装方針:
- * GitHubのIssueコメントアセットアップロードは、通常、以下のような方法で実装:
- * 1. GitHub REST APIでアセットアップロード用の署名付きURLを取得
- *    - `/repos/{owner}/{repo}/releases/assets` エンドポイントはRelease専用
- *    - Issueコメントアセット用の専用エンドポイントを使用
- * 2. そのURLにPUTリクエストでファイルをアップロード
- * 3. アップロードされたURLを使用してuploadIssueCommentAsset mutationを実行
- * 
- * 注意: GitHubの実際のAPI仕様では、Issueコメントアセットは通常、
- * Releaseアセットとは異なるエンドポイントを使用する。
- * この実装は、GitHubの公式API仕様に基づいて実装する必要がある。
+ * GraphQL mutationでファイルデータを渡すためにbase64エンコードする
  */
-async function uploadToGitHubS3(
-  buffer: Buffer,
-  filename: string,
-  mimetype: string,
-  issueNumber: string
-): Promise<string> {
-  const owner = process.env.GITHUB_OWNER;
-  const repo = process.env.GITHUB_REPO;
-  const token = process.env.GITHUB_TOKEN;
-
-  if (!owner || !repo || !token) {
-    throw new Error("GITHUB_OWNER, GITHUB_REPO, or GITHUB_TOKEN is not set");
-  }
-
-  // GitHubのIssueコメントアセットアップロード用の署名付きURLを取得
-  // 注意: このエンドポイントは実際のGitHub API仕様に基づいて実装する必要がある
-  // 暫定的な実装として、GitHub REST APIの `/repos/{owner}/{repo}/issues/{issue_number}/assets` 
-  // エンドポイントを使用するが、実際のAPI仕様では異なる可能性がある
-  
-  // まず、アセットアップロード用の署名付きURLを取得
-  const requestUrl = `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/assets/upload`;
-  
-  console.log(`[GitHub S3] Requesting upload URL for ${filename}`);
-
-  const requestResponse = await fetch(requestUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      name: filename,
-      size: buffer.length,
-      content_type: mimetype,
-    }),
-  });
-
-  if (!requestResponse.ok) {
-    const text = await requestResponse.text();
-    console.error(
-      `[GitHub S3] Failed to get upload URL: ${requestResponse.status} ${text}`
-    );
-
-    // エンドポイントが存在しない場合、別の方法を試す
-    // GitHubのIssueコメントアセットアップロードは、通常、以下のような方法で実装:
-    // 1. GraphQL mutationの `uploadIssueCommentAsset` が内部でS3アップロードを処理
-    // 2. または、GitHub REST APIの別のエンドポイントを使用
-    
-    // 暫定的な実装: 直接アップロードを試す
-    // 実際の実装では、GitHubのIssueコメントアセットアップロード用の
-    // 専用エンドポイントを使用する必要がある
-    
-    throw new Error(
-      `Failed to get upload URL: ${requestResponse.status} ${text.substring(0, 200)}`
-    );
-  }
-
-  const uploadData = await requestResponse.json();
-  const uploadUrl = uploadData.upload_url;
-
-  if (!uploadUrl) {
-    throw new Error("GitHub API response missing upload_url");
-  }
-
-  console.log(`[GitHub S3] Uploading ${filename} to ${uploadUrl.substring(0, 50)}...`);
-
-  // 署名付きURLにPUTリクエストでファイルをアップロード
-  // BufferをUint8Arrayに変換（fetchのbodyはBodyInit型が必要）
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": mimetype,
-      "Content-Length": buffer.length.toString(),
-    },
-    body: new Uint8Array(buffer),
-  });
-
-  if (!uploadResponse.ok) {
-    const text = await uploadResponse.text();
-    console.error(`[GitHub S3] Upload failed: ${uploadResponse.status} ${text}`);
-    throw new Error(
-      `Failed to upload to GitHub S3: ${uploadResponse.status} ${text.substring(0, 200)}`
-    );
-  }
-
-  // アップロードされたURLを取得
-  // 注意: 実際のAPI仕様では、レスポンスからURLを取得する方法が異なる可能性がある
-  const location = uploadResponse.headers.get("Location") || uploadData.browser_download_url;
-  if (!location) {
-    throw new Error("GitHub S3 upload response missing URL");
-  }
-
-  return location;
+function encodeFileToBase64(buffer: Buffer): string {
+  return buffer.toString("base64");
 }
 
 /**
@@ -228,21 +121,19 @@ export async function uploadSlackFileToGitHub(
     const repositoryId = await getRepositoryId(owner, repo);
     const issueId = await getIssueId(repositoryId, parseInt(issueNumber, 10));
 
-    // GitHub S3にアップロード
-    // 注意: この実装は実際のGitHub API仕様に合わせて調整が必要
-    const assetUrl = await uploadToGitHubS3(
-      downloaded.buffer,
-      downloaded.filename,
-      downloaded.mimetype,
-      issueNumber
-    );
+    // ファイルをbase64エンコード
+    // GraphQL mutationでファイルデータを渡すためにbase64エンコードする
+    const fileDataBase64 = encodeFileToBase64(downloaded.buffer);
+    console.log(`[Upload Asset] Encoded ${downloaded.filename} to base64 (${fileDataBase64.length} chars)`);
 
     // uploadIssueCommentAsset mutationでアセットを登録
+    // このmutationが内部でS3アップロードを処理する
     const finalAssetUrl = await uploadIssueCommentAsset(
       repositoryId,
       issueId,
-      assetUrl,
-      downloaded.filename
+      fileDataBase64,
+      downloaded.filename,
+      downloaded.mimetype
     );
 
     return {

@@ -131,33 +131,40 @@ export async function getIssueId(
 /**
  * uploadIssueCommentAsset mutation を実行
  * 
- * この mutation は、GitHub S3 にアップロードされたファイルを
+ * この mutation は、ファイルのバイナリデータをbase64エンコードして
  * Issue コメントで使用できるアセットとして登録する
+ * 
+ * 注意: GitHubの実際のAPI仕様では、このmutationがファイルのバイナリデータを
+ * 直接受け取る可能性があるため、base64エンコードして渡す
  * 
  * @param repositoryId - リポジトリのID（GraphQL ID型）
  * @param issueId - IssueのID（GraphQL ID型）
- * @param assetUrl - GitHub S3にアップロードされたファイルのURL
+ * @param fileData - ファイルのバイナリデータ（base64エンコード済み）
  * @param assetName - アセット名（ファイル名）
+ * @param contentType - ファイルのContent-Type
  * @returns アセットのURL（Issueコメントで使用可能）
  */
 export async function uploadIssueCommentAsset(
   repositoryId: string,
   issueId: string,
-  assetUrl: string,
-  assetName: string
+  fileData: string, // base64エンコードされたファイルデータ
+  assetName: string,
+  contentType: string
 ): Promise<string> {
   const mutation = `
     mutation UploadIssueCommentAsset(
       $repositoryId: ID!
       $issueId: ID!
-      $assetUrl: String!
+      $fileData: String!
       $assetName: String!
+      $contentType: String!
     ) {
       uploadIssueCommentAsset(
         repositoryId: $repositoryId
         issueId: $issueId
-        assetUrl: $assetUrl
+        fileData: $fileData
         assetName: $assetName
+        contentType: $contentType
       ) {
         assetUrl
       }
@@ -173,8 +180,9 @@ export async function uploadIssueCommentAsset(
   const data = await executeGraphQL<Response>(mutation, {
     repositoryId,
     issueId,
-    assetUrl,
+    fileData,
     assetName,
+    contentType,
   });
 
   return data.uploadIssueCommentAsset.assetUrl;
