@@ -3,8 +3,12 @@
  * 
  * Bot Tokenを使用して url_private_download からファイルを取得
  * Vercel Blob や S3 は一切使わず、メモリ上で処理する
+ * 
+ * 注意: PDFなどの大きめバイナリファイルでは arrayBuffer() ではなく
+ * ストリーム読み込みを使用（Serverless環境での詰まりを回避）
  */
 
+import { Readable } from "stream";
 import { callSlackApi } from "./slackApi";
 
 interface SlackFile {
@@ -77,13 +81,28 @@ export async function downloadSlackFile(
     redirect: "follow",
   });
 
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => "");
+    console.error(
+      `[Slack Download] Slack download failed: ${res.status} ${filename}`,
+      text.substring(0, 200)
+    );
+    throw new Error(
+      `Slack download failed: ${res.status} ${filename}. This usually means:\n` +
+        `1. The 'files:read' scope is not set in your Slack App\n` +
+        `2. The app needs to be reinstalled after adding the scope\n` +
+        `3. The Bot Token does not have permission to access this file\n` +
+        `Response: ${text.substring(0, 200)}`
+    );
+  }
+
   const contentType = res.headers.get("content-type") ?? "";
-  console.log(
-    `[Slack Download] Response status: ${res.status}, content-type: ${contentType}`
+  console.info(
+    `[Slack Download] Response OK ${filename}, content-type: ${contentType}`
   );
 
   // Content-Typeチェック: HTMLが返ってきたらエラー
-  if (!res.ok || contentType.includes("text/html")) {
+  if (contentType.includes("text/html")) {
     const text = await res.text();
     console.error(
       `[Slack Download] Slack returned HTML instead of file:`,
@@ -98,10 +117,19 @@ export async function downloadSlackFile(
     );
   }
 
-  const arrayBuffer = await res.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
+  // ストリーム読み込み（arrayBuffer()はPDFなどの大きめバイナリで詰まるため使用しない）
+  const chunks: Buffer[] = [];
+  const stream = Readable.fromWeb(res.body as any);
 
-  console.log(`[Slack Download] Downloaded ${buffer.length} bytes`);
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  const buffer = Buffer.concat(chunks);
+
+  console.info(
+    `[Slack Download] Completed ${filename}, size: ${buffer.length}`
+  );
 
   return {
     filename,
