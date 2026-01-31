@@ -24,7 +24,11 @@ export async function POST(req: Request) {
 
   // ② モーダル送信 → Issue投稿
   if (payload.type === "view_submission") {
-    await handleSubmit(payload);
+    // Slackには即レスポンス（3秒制限対応）
+    queueMicrotask(() => {
+      handleSubmit(payload).catch(console.error);
+    });
+
     return new Response(
       JSON.stringify({ response_action: "clear" }),
       { status: 200, headers: { "content-type": "application/json" } }
@@ -88,7 +92,7 @@ async function handleSubmit(payload: any) {
   const uploadedFiles: Array<{
     filename: string;
     url: string;
-    isImage: boolean;
+    mimetype: string;
   }> = [];
 
   for (const file of slackFiles) {
