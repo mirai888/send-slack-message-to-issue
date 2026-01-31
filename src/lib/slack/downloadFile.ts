@@ -71,47 +71,66 @@ export async function downloadSlackFile(
   console.log("[A7] downloadSlackFile: fetchリクエストを開始");
   console.log(`[A7-1] downloadSlackFile: ダウンロードURL - ${downloadUrl}`);
   
-  // タイムアウト設定（30秒）- Promise.raceを使用してより確実にタイムアウトを実装
-  let timeoutId: NodeJS.Timeout | null = null;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      console.log("[A7-TIMEOUT] downloadSlackFile: タイムアウト発生（30秒経過）");
-      reject(new Error("Slack download timeout: Request took longer than 30 seconds"));
-    }, 30000);
-  });
-  
+  // AbortControllerでタイムアウト管理（Promise.raceは使わない）
   const controller = new AbortController();
-  const fetchPromise = fetch(downloadUrl, {
-    headers: {
-      Authorization: `Bearer ${botToken}`,
-      "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
-    },
-    redirect: "follow",
-    signal: controller.signal,
-  });
-  
+  const timeoutId = setTimeout(() => {
+    console.log("[A7-TIMEOUT] downloadSlackFile: AbortController発火");
+    controller.abort();
+  }, 30000);
+
   let res: Response;
   try {
     console.log("[A7-2] downloadSlackFile: fetch実行中...");
-    res = await Promise.race([fetchPromise, timeoutPromise]);
-    // fetchが完了したらタイムアウトをクリア
-    if (timeoutId) {
-      clearTimeout(timeoutId);
+    res = await fetch(downloadUrl, {
+      headers: {
+        Authorization: `Bearer ${botToken}`,
+        "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+      },
+      redirect: "manual", // 超重要：redirect followは無限ループの原因
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    console.log(`[A7-ERROR] downloadSlackFile: エラー発生 - ${err instanceof Error ? err.message : "Unknown error"}`);
+    throw new Error(
+      `Slack fetch failed: ${err instanceof Error ? err.message : "unknown error"}`
+    );
+  }
+
+  clearTimeout(timeoutId);
+  console.log(`[A8] downloadSlackFile: fetch完了 status=${res.status}`);
+
+  // Slackのurl_private_downloadはほぼ必ず302を返すので、1回だけ手動で追跡
+  if (res.status === 302) {
+    const location = res.headers.get("location");
+    if (!location) {
+      throw new Error("Slack redirect without location header");
     }
-    console.log(`[A8] downloadSlackFile: fetchリクエスト完了 - status: ${res.status}`);
-    console.log(`[A8-1] downloadSlackFile: Response headers - ${JSON.stringify(Object.fromEntries(res.headers.entries()))}`);
-  } catch (error) {
-    // タイムアウトの場合はAbortControllerも中止
-    if (timeoutId) {
-      clearTimeout(timeoutId);
+
+    console.log(`[A8-REDIRECT] downloadSlackFile: redirect to ${location.substring(0, 50)}...`);
+
+    // リダイレクト先へのリクエスト（タイムアウトは引き続き有効）
+    const redirectTimeoutId = setTimeout(() => {
+      console.log("[A8-REDIRECT-TIMEOUT] downloadSlackFile: リダイレクト先のタイムアウト");
+      controller.abort();
+    }, 30000);
+
+    try {
+      res = await fetch(location, {
+        headers: {
+          Authorization: `Bearer ${botToken}`,
+          "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(redirectTimeoutId);
+      console.log(`[A8-REDIRECT-OK] downloadSlackFile: リダイレクト先のfetch完了 status=${res.status}`);
+    } catch (err) {
+      clearTimeout(redirectTimeoutId);
+      throw new Error(
+        `Slack redirect fetch failed: ${err instanceof Error ? err.message : "unknown error"}`
+      );
     }
-    controller.abort();
-    console.log(`[A7-ERROR] downloadSlackFile: エラー発生 - ${error instanceof Error ? error.message : "Unknown error"}`);
-    console.log(`[A7-ERROR-2] downloadSlackFile: エラー詳細 - ${error instanceof Error ? error.stack : "No stack trace"}`);
-    if (error instanceof Error && (error.name === "AbortError" || error.message.includes("timeout"))) {
-      throw new Error("Slack download timeout: Request took longer than 30 seconds");
-    }
-    throw new Error(`Slack download failed: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 
   if (!res.ok || !res.body) {
@@ -129,34 +148,11 @@ export async function downloadSlackFile(
 
   console.log("[A10] downloadSlackFile: ストリーム読み込みを開始");
   const chunks: Buffer[] = [];
-  
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const stream = Readable.fromWeb(res.body as any);
-    
-    // ストリーム読み込みタイムアウト（60秒）
-    let streamTimeoutId: NodeJS.Timeout | null = null;
-    const resetTimeout = () => {
-      if (streamTimeoutId) {
-        clearTimeout(streamTimeoutId);
-      }
-      streamTimeoutId = setTimeout(() => {
-        stream.destroy(new Error("Stream read timeout: No data received for 60 seconds"));
-      }, 60000);
-    };
-    
-    resetTimeout();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stream = Readable.fromWeb(res.body as any);
 
-    for await (const chunk of stream) {
-      resetTimeout();
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    
-    if (streamTimeoutId) {
-      clearTimeout(streamTimeoutId);
-    }
-  } catch (error) {
-    throw new Error(`Stream read failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
 
   const buffer = Buffer.concat(chunks);
