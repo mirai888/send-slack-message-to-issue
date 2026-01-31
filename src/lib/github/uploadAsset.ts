@@ -110,10 +110,20 @@ async function createOrUpdateFileContents(
   // リポジトリの存在確認
   const repoExists = await checkRepositoryExists(owner, repo);
   if (!repoExists) {
-    throw new Error(
-      `Repository ${owner}/${repo} does not exist or you don't have access to it. ` +
-      `Please create the repository first or check GITHUB_ASSETS_REPO environment variable.`
-    );
+    const mainRepo = process.env.GITHUB_REPO;
+    let errorMessage = `Repository ${owner}/${repo} does not exist or you don't have access to it.`;
+    
+    if (process.env.GITHUB_ASSETS_REPO) {
+      errorMessage += `\n\nYou have GITHUB_ASSETS_REPO=${process.env.GITHUB_ASSETS_REPO} set.`;
+      errorMessage += `\nEither:`;
+      errorMessage += `\n  1. Create the repository ${owner}/${repo}, or`;
+      errorMessage += `\n  2. Remove GITHUB_ASSETS_REPO environment variable to use the main repository (${owner}/${mainRepo || 'GITHUB_REPO'})`;
+    } else {
+      errorMessage += `\n\nThis is the main repository (${owner}/${repo}).`;
+      errorMessage += `\nPlease ensure the repository exists and your GitHub token has write access.`;
+    }
+    
+    throw new Error(errorMessage);
   }
 
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
@@ -202,8 +212,8 @@ export async function uploadSlackFileToGitHub(
     const owner = process.env.GITHUB_OWNER!;
     const mainRepo = process.env.GITHUB_REPO;
     // GITHUB_ASSETS_REPO が指定されていない場合は、メインリポジトリを使用
-    const assetsRepo = process.env.GITHUB_ASSETS_REPO || mainRepo;
-    const assetsBranch = process.env.GITHUB_ASSETS_BRANCH || "main";
+    const assetsRepo = mainRepo;
+    const assetsBranch = "main";
 
     if (!owner) {
       throw new Error("GITHUB_OWNER is not set");
@@ -216,9 +226,19 @@ export async function uploadSlackFileToGitHub(
       );
     }
 
-    console.info(
-      `[Upload Asset] Using assets repository: ${owner}/${assetsRepo} (branch: ${assetsBranch})`
-    );
+    // 使用するリポジトリをログに出力（デバッグ用）
+    if (process.env.GITHUB_ASSETS_REPO) {
+      console.info(
+        `[Upload Asset] Using separate assets repository: ${owner}/${assetsRepo} (branch: ${assetsBranch})`
+      );
+      console.info(
+        `[Upload Asset] Note: GITHUB_ASSETS_REPO is set. To use main repository, remove GITHUB_ASSETS_REPO environment variable.`
+      );
+    } else {
+      console.info(
+        `[Upload Asset] Using main repository: ${owner}/${assetsRepo} (branch: ${assetsBranch})`
+      );
+    }
 
     // ファイルをbase64エンコード
     const fileDataBase64 = downloaded.buffer.toString("base64");
