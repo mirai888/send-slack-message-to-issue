@@ -41,12 +41,35 @@ export async function POST(req: Request) {
 /* ---------- handlers ---------- */
 
 async function openIssueSelectModal(payload: any) {
+  // private_metadataは3000文字制限があるため、最小限の情報のみ保存
+  const files = (payload.message.files ?? []).map((file: any) => ({
+    id: file.id,
+    name: file.name,
+    mimetype: file.mimetype,
+    url_private_download: file.url_private_download,
+    url_private: file.url_private,
+  }));
+
   const meta = {
     text: payload.message.text ?? "",
     user: payload.user.username ?? payload.user.id,
     channel: payload.channel.name ?? payload.channel.id,
-    files: payload.message.files ?? [],
+    files,
   };
+
+  const metadataJson = JSON.stringify(meta);
+  
+  // 3000文字制限チェック（念のため）
+  if (metadataJson.length > 3000) {
+    console.warn(`[Interactivity] private_metadata is too long: ${metadataJson.length} chars. Truncating files.`);
+    // ファイル情報をさらに最小限に（idとnameだけ）
+    const minimalFiles = (payload.message.files ?? []).map((file: any) => ({
+      id: file.id,
+      name: file.name,
+      mimetype: file.mimetype,
+    }));
+    meta.files = minimalFiles;
+  }
 
   await callSlackApi("views.open", {
     trigger_id: payload.trigger_id,
@@ -87,7 +110,6 @@ async function handleSubmit(payload: any) {
   // 添付ファイル処理
   const slackFiles = meta.files ?? [];
   console.log(`[Interactivity] Processing ${slackFiles.length} files`);
-  console.log(`[Interactivity] File objects:`, JSON.stringify(slackFiles, null, 2));
 
   const uploadedFiles: Array<{
     filename: string;
@@ -97,10 +119,18 @@ async function handleSubmit(payload: any) {
 
   for (const file of slackFiles) {
     try {
-      const uploaded = await downloadAndStoreSlackFile(file);
+      // url_private_downloadがない場合は、Slack APIからファイル情報を再取得
+      let fileInfo = file;
+      if (!file.url_private_download && !file.url_private && file.id) {
+        console.log(`[Interactivity] Fetching file info for ${file.id}`);
+        const fileResponse = await callSlackApi("files.info", { file: file.id });
+        fileInfo = fileResponse.file;
+      }
+
+      const uploaded = await downloadAndStoreSlackFile(fileInfo);
       uploadedFiles.push(uploaded);
     } catch (e) {
-      console.error("file upload failed", file.name, e);
+      console.error("file upload failed", file.name || file.id, e);
     }
   }
 
