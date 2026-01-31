@@ -4,11 +4,10 @@
  * Bot Tokenを使用して url_private_download からファイルを取得
  * Vercel Blob や S3 は一切使わず、メモリ上で処理する
  * 
- * 注意: PDFなどの大きめバイナリファイルでは arrayBuffer() ではなく
- * ストリーム読み込みを使用（Serverless環境での詰まりを回避）
+ * 過去のVercel Blob実装では arrayBuffer() を使用していたため、
+ * 同じアプローチを採用（Vercel環境での互換性のため）
  */
 
-import { Readable } from "stream";
 import { callSlackApi } from "./slackApi";
 
 interface SlackFile {
@@ -70,63 +69,38 @@ export async function downloadSlackFile(
 
   console.log("[A7] downloadSlackFile: fetchリクエストを開始");
   
-  // タイムアウト設定（30秒）
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, 30000); // 30秒
+  // 過去のVercel Blob実装と同じシンプルなfetchオプションを使用
+  const res = await fetch(downloadUrl, {
+    headers: {
+      Authorization: `Bearer ${botToken}`,
+    },
+  });
+  console.log(`[A8] downloadSlackFile: fetchリクエスト完了 - status: ${res.status}`);
 
-  let res: Response;
-  try {
-    res = await fetch(downloadUrl, {
-      headers: {
-        Authorization: `Bearer ${botToken}`,
-        "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
-      },
-      redirect: "follow",
-      signal: controller.signal,
-      cache: "no-store", // Vercel環境でのキャッシュ問題を回避
-    });
-    clearTimeout(timeoutId);
-    console.log(`[A8] downloadSlackFile: fetchリクエスト完了 - status: ${res.status}`);
-
-    if (!res.ok || !res.body) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`Slack download failed: ${res.status} ${text}`);
-    }
-
-    const contentType = res.headers.get("content-type") ?? "";
-    console.log(`[A9] downloadSlackFile: Content-Typeを確認 - ${contentType}`);
-    
-    if (contentType.includes("text/html")) {
-      const text = await res.text();
-      throw new Error(`Slack returned HTML instead of file: ${text.substring(0, 200)}`);
-    }
-
-    console.log("[A10] downloadSlackFile: ストリーム読み込みを開始");
-    const chunks: Buffer[] = [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const stream = Readable.fromWeb(res.body as any);
-
-    for await (const chunk of stream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-
-    const buffer = Buffer.concat(chunks);
-    console.log(`[A11] downloadSlackFile: ストリーム読み込み完了 - ${buffer.length} bytes`);
-
-    console.log("[A12] downloadSlackFile: 完了");
-    return {
-      filename,
-      mimetype: mimetype ?? contentType,
-      buffer,
-      size: buffer.length,
-    };
-  } catch (error) {
-    clearTimeout(timeoutId);
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("Slack download timeout: Request took longer than 30 seconds");
-    }
-    throw error;
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Slack download failed: ${res.status} ${text}`);
   }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  console.log(`[A9] downloadSlackFile: Content-Typeを確認 - ${contentType}`);
+  
+  if (contentType.includes("text/html")) {
+    const text = await res.text();
+    throw new Error(`Slack returned HTML instead of file: ${text.substring(0, 200)}`);
+  }
+
+  console.log("[A10] downloadSlackFile: arrayBuffer()で読み込みを開始");
+  // 過去のVercel Blob実装と同じく arrayBuffer() を使用
+  const arrayBuffer = await res.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  console.log(`[A11] downloadSlackFile: 読み込み完了 - ${buffer.length} bytes`);
+
+  console.log("[A12] downloadSlackFile: 完了");
+  return {
+    filename,
+    mimetype: mimetype ?? contentType,
+    buffer,
+    size: buffer.length,
+  };
 }
