@@ -17,6 +17,10 @@ interface SlackFile {
 interface MessageActionPayload {
   type: "message_action";
   trigger_id: string;
+  team?: {
+    id: string;
+    domain?: string;
+  };
   user: {
     id: string;
     username?: string;
@@ -28,6 +32,7 @@ interface MessageActionPayload {
   message: {
     text?: string;
     files?: SlackFile[];
+    ts?: string;
   };
 }
 
@@ -110,6 +115,10 @@ async function openIssueSelectModal(payload: MessageActionPayload) {
     text: payload.message.text ?? "",
     user: payload.user.username ?? payload.user.id,
     channel: payload.channel.name ?? payload.channel.id,
+    channelId: payload.channel.id,
+    messageTs: payload.message.ts,
+    teamId: payload.team?.id,
+    teamDomain: payload.team?.domain,
     files,
   };
 
@@ -273,6 +282,10 @@ async function handleSubmit(payload: ViewSubmissionPayload) {
     text: meta.text,
     user: meta.user,
     channel: meta.channel,
+    channelId: meta.channelId,
+    messageTs: meta.messageTs,
+    teamId: meta.teamId,
+    teamDomain: meta.teamDomain,
     attachments: formatAttachments(uploadedFiles),
     errors: uploadErrors,
   });
@@ -284,12 +297,20 @@ function formatIssueComment({
   text,
   user,
   channel,
+  channelId,
+  messageTs,
+  teamId,
+  teamDomain,
   attachments,
   errors,
 }: {
   text: string;
   user: string;
   channel: string;
+  channelId?: string;
+  messageTs?: string;
+  teamId?: string;
+  teamDomain?: string;
   attachments: string;
   errors?: Array<{ filename: string; reason: string }>;
 }) {
@@ -309,11 +330,31 @@ ${errorLines.join("\n")}
 `;
   }
 
+  // Slackメッセージへのリンクを生成
+  let slackLink = "";
+  if (channelId && messageTs) {
+    if (teamDomain) {
+      // ワークスペース名が分かる場合（アーカイブリンク形式）
+      // タイムスタンプから小数点を削除（例: 1234567890.123456 → 1234567890123456）
+      const timestamp = messageTs.replace(".", "");
+      slackLink = `https://${teamDomain}.slack.com/archives/${channelId}/p${timestamp}`;
+    } else if (teamId) {
+      // チームIDのみの場合（クライアントリンク形式）
+      slackLink = `https://app.slack.com/client/${teamId}/${channelId}/message/${messageTs}`;
+    }
+    // teamDomainもteamIdもない場合はリンクを生成しない
+  }
+
+  const slackLinkSection = slackLink
+    ? `**元のメッセージ**: [Slackで見る](${slackLink})  `
+    : "";
+
   return `
 ## Slackから共有 🧵
 
 **投稿者**: @${user}  
-**チャンネル**: #${channel}
+**チャンネル**: #${channel}  
+${slackLinkSection}
 
 ${quoted || "> （本文なし）"}
 ${attachments}
