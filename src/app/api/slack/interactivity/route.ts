@@ -156,19 +156,12 @@ async function openIssueSelectModal(payload: SlackMessageActionPayload) {
 }
 
 async function handleSubmit(payload: SlackViewSubmissionPayload) {
-  console.info("[Interactivity] handleSubmit started");
-  
   const state = payload.view.state.values;
   const issueNumber =
     state.issue.issue_select.selected_option.value;
 
-  console.info(`[Interactivity] Target issue: #${issueNumber}`);
-
   const meta = JSON.parse(payload.view.private_metadata);
-
-  // 添付ファイル処理（GitHubに直接アップロード）
   const slackFiles = meta.files ?? [];
-  console.info(`[Interactivity] Processing ${slackFiles.length} files for issue #${issueNumber}`);
 
   const uploadedFiles: Array<{
     filename: string;
@@ -183,48 +176,35 @@ async function handleSubmit(payload: SlackViewSubmissionPayload) {
   // ファイルごとに try/catch し、1つ失敗しても他は続行する
   for (const file of slackFiles) {
     try {
-      // url_private_downloadがない場合は、Slack APIからファイル情報を再取得
       let fileInfo = file;
       if (!file.url_private_download && !file.url_private && file.id) {
-        console.log(`[Interactivity] Fetching file info for ${file.id}`);
         const fileResponse = await callSlackApi("files.info", { file: file.id });
         fileInfo = fileResponse.file;
       }
 
-      // GitHubに直接アップロード（Vercel Blobは使用しない）
       const result = await uploadSlackFileToGitHub(fileInfo, issueNumber);
 
       if ("url" in result) {
-        // アップロード成功
         uploadedFiles.push({
           filename: result.filename,
           url: result.url,
           mimetype: result.mimetype,
         });
-        console.log(`[Interactivity] Successfully uploaded ${result.filename}`);
       } else {
-        // アップロード失敗（サイズ超過、未サポートファイル種別など）
         uploadErrors.push({
           filename: result.filename,
           reason: result.reason,
         });
-        console.warn(`[Interactivity] Skipped ${result.filename}: ${result.reason}`);
       }
     } catch (e) {
       const filename = file.name || file.id || "unknown";
-      const errorMessage = e instanceof Error ? e.message : "Unknown error";
-      console.error(`[Interactivity] File upload failed: ${filename}`, e);
       uploadErrors.push({
         filename,
-        reason: errorMessage,
+        reason: e instanceof Error ? e.message : "Unknown error",
       });
     }
   }
 
-  // Issueコメント本文を生成
-  console.info(`[Interactivity] Formatting comment for issue #${issueNumber}`);
-  console.info(`[Interactivity] Uploaded files: ${uploadedFiles.length}, Errors: ${uploadErrors.length}`);
-  
   const body = formatIssueComment({
     text: meta.text,
     user: meta.user,
@@ -233,17 +213,7 @@ async function handleSubmit(payload: SlackViewSubmissionPayload) {
     errors: uploadErrors,
   });
 
-  console.info(`[Interactivity] Posting comment to issue #${issueNumber}`);
-  console.info(`[Interactivity] Comment body length: ${body.length} chars`);
-  console.debug(`[Interactivity] Comment body preview: ${body.substring(0, 200)}...`);
-  
-  try {
-    await postIssueComment(issueNumber, body);
-    console.info(`[Interactivity] Successfully posted comment to issue #${issueNumber}`);
-  } catch (error) {
-    console.error(`[Interactivity] Failed to post comment to issue #${issueNumber}:`, error);
-    throw error; // エラーを再スローして上位でキャッチされるようにする
-  }
+  await postIssueComment(issueNumber, body);
 }
 
 function formatIssueComment({
