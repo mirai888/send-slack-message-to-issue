@@ -69,11 +69,27 @@ export async function POST(req: Request) {
 
   // ② モーダル送信 → Issue投稿
   if (payload.type === "view_submission") {
-    await handleSubmit(payload as ViewSubmissionPayload);
-    return new Response(
-      JSON.stringify({ response_action: "clear" }),
-      { status: 200, headers: { "content-type": "application/json" } }
-    );
+    try {
+      await handleSubmit(payload as ViewSubmissionPayload);
+      return new Response(
+        JSON.stringify({ response_action: "clear" }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    } catch (error) {
+      console.error("[view_submission] Error in handleSubmit:", error);
+      const errorMessage = error instanceof Error ? error.message : "不明なエラーが発生しました";
+      
+      // Slackにエラーメッセージを返す
+      return new Response(
+        JSON.stringify({
+          response_action: "errors",
+          errors: {
+            issue: errorMessage,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
   }
 
   return new Response("", { status: 200 });

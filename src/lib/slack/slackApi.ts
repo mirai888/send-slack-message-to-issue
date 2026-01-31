@@ -13,8 +13,12 @@ export async function callSlackApi(method: string, body: unknown) {
   const json = await res.json();
 
   if (!json.ok) {
-    console.error("Slack API error:", json);
-    throw new Error(`Slack API error: ${method}`);
+    const errorMessage = json.error || "Unknown error";
+    console.error(`[Slack API] ${method} failed:`, {
+      error: errorMessage,
+      response: json,
+    });
+    throw new Error(`Slack API error (${method}): ${errorMessage}`);
   }
 
   return json;
