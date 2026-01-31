@@ -1,4 +1,6 @@
 export async function callSlackApi(method: string, body: unknown) {
+  console.log(`[Slack API] Calling ${method} with body:`, JSON.stringify(body));
+  
   const res = await fetch(`https://slack.com/api/${method}`, {
     method: "POST",
     headers: {

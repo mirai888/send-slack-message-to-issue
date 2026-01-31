@@ -1,5 +1,4 @@
 import { put } from "@vercel/blob";
-import { callSlackApi } from "./slackApi";
 
 interface SlackFile {
   id?: string;
@@ -26,42 +25,16 @@ export async function downloadAndStoreSlackFile(
     throw new Error(`No file ID for: ${filename}`);
   }
 
-  console.log(`[Slack File] Getting file info for file ID: ${file.id}`);
+  // payloadから取得したURLを直接使用
+  // files.info APIは呼び出し方法が複雑なため、payloadに含まれる情報を使用
+  const downloadUrl = file.url_private_download ?? file.url_private;
+  const finalMimetype = mimetype;
 
-  // files.info APIを使ってファイル情報を取得
-  let downloadUrl: string;
-  let finalMimetype = mimetype;
-  
-  try {
-    const result = await callSlackApi("files.info", {
-      file: file.id,
-    });
-
-    console.log(`[Slack File] files.info response:`, {
-      hasFile: !!result.file,
-      urlPrivateDownload: !!result.file?.url_private_download,
-      urlPrivate: !!result.file?.url_private,
-      mimetype: result.file?.mimetype,
-    });
-
-    // files.info APIから取得したURLを使用
-    downloadUrl = result.file?.url_private_download ?? result.file?.url_private;
-    finalMimetype = result.file?.mimetype ?? mimetype;
-    
-    if (!downloadUrl) {
-      throw new Error(`No download URL in files.info response`);
-    }
-
-    console.log(`[Slack File] Got download URL from files.info: ${downloadUrl.substring(0, 50)}...`);
-  } catch (e) {
-    console.error(`[Slack File] files.info failed:`, e);
-    // フォールバック: payloadから取得したURLを使用
-    downloadUrl = file.url_private_download ?? file.url_private ?? "";
-    if (!downloadUrl) {
-      throw new Error(`No download URL for file: ${filename}`);
-    }
-    console.log(`[Slack File] Falling back to URL from payload: ${downloadUrl.substring(0, 50)}...`);
+  if (!downloadUrl) {
+    throw new Error(`No download URL for file: ${filename}`);
   }
+
+  console.log(`[Slack File] Using URL from payload: ${downloadUrl.substring(0, 50)}...`);
 
   console.log(`[Slack File] Downloading: ${filename} from ${downloadUrl.substring(0, 50)}...`);
 
