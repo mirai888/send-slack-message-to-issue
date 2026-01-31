@@ -30,10 +30,27 @@ export async function downloadAndStoreSlackFile(
 
   console.log(`[Slack File] Downloading: ${filename} from ${downloadUrl.substring(0, 50)}...`);
 
+  // Bot Tokenの確認
+  const botToken = process.env.SLACK_BOT_TOKEN;
+  if (!botToken) {
+    throw new Error(`SLACK_BOT_TOKEN is not set`);
+  }
+
+  // トークンの形式確認（xoxb-で始まる必要がある）
+  const tokenPrefix = botToken.substring(0, 5);
+  console.log(`[Slack File] Bot Token prefix: ${tokenPrefix} (should be 'xoxb-')`);
+
+  if (!botToken.startsWith("xoxb-")) {
+    throw new Error(`SLACK_BOT_TOKEN must start with 'xoxb-' (Bot Token), got: ${tokenPrefix}...`);
+  }
+
   // Bearer認証が必須（これがないとHTMLが返ってくる）
+  const authHeader = `Bearer ${botToken}`;
+  console.log(`[Slack File] Authorization header: Bearer ${tokenPrefix}...`);
+
   const res = await fetch(downloadUrl, {
     headers: {
-      Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`,
+      Authorization: authHeader,
     },
   });
 
