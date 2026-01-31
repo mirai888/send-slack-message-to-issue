@@ -1,6 +1,8 @@
 import { verifySlackRequest } from "@/lib/slack/verify";
 import { callSlackApi } from "@/lib/slack/slackApi";
+import { downloadAndStoreSlackFile } from "@/lib/slack/files";
 import { postIssueComment } from "@/lib/github/issue";
+import { formatAttachments } from "@/lib/github/formatAttachments";
 
 export const runtime = "nodejs";
 
@@ -39,6 +41,7 @@ async function openIssueSelectModal(payload: any) {
     text: payload.message.text ?? "",
     user: payload.user.username ?? payload.user.id,
     channel: payload.channel.name ?? payload.channel.id,
+    files: payload.message.files ?? [],
   };
 
   await callSlackApi("views.open", {
@@ -77,10 +80,28 @@ async function handleSubmit(payload: any) {
 
   const meta = JSON.parse(payload.view.private_metadata);
 
+  // 添付ファイル処理
+  const slackFiles = meta.files ?? [];
+  const uploadedFiles: Array<{
+    filename: string;
+    url: string;
+    isImage: boolean;
+  }> = [];
+
+  for (const file of slackFiles) {
+    try {
+      const uploaded = await downloadAndStoreSlackFile(file);
+      uploadedFiles.push(uploaded);
+    } catch (e) {
+      console.error("file upload failed", file.name, e);
+    }
+  }
+
   const body = formatIssueComment({
     text: meta.text,
     user: meta.user,
     channel: meta.channel,
+    attachments: formatAttachments(uploadedFiles),
   });
 
   await postIssueComment(issueNumber, body);
@@ -90,10 +111,12 @@ function formatIssueComment({
   text,
   user,
   channel,
+  attachments,
 }: {
   text: string;
   user: string;
   channel: string;
+  attachments: string;
 }) {
   const quoted = text
     .split("\n")
@@ -107,5 +130,6 @@ function formatIssueComment({
 **チャンネル**: #${channel}
 
 ${quoted || "> （本文なし）"}
+${attachments}
 `.trim();
 }
