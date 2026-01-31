@@ -1,6 +1,6 @@
 import { verifySlackRequest } from "@/lib/slack/verify";
 import { callSlackApi } from "@/lib/slack/slackApi";
-import { downloadAndStoreSlackFile } from "@/lib/slack/files";
+import { downloadAndStoreSlackFile, deleteBlobFile } from "@/lib/slack/files";
 import { uploadBlobFileToGitHub } from "@/lib/github/uploadAsset";
 import { postIssueComment } from "@/lib/github/issue";
 import { formatAttachments } from "@/lib/github/formatAttachments";
@@ -115,11 +115,17 @@ async function handleSubmit(payload: any) {
           url: result.url,
           isImage: result.isImage,
         });
+        
+        // 3. GitHubへのアップロード成功後、Vercel Blobのファイルを削除
+        await deleteBlobFile(blobFile.url);
       } else {
         uploadErrors.push({
           filename: result.filename,
           reason: result.reason,
         });
+        
+        // GitHubへのアップロード失敗時もVercel Blobのファイルを削除（不要なファイルを残さない）
+        await deleteBlobFile(blobFile.url);
       }
     } catch (e) {
       const filename = file.name || "unknown";

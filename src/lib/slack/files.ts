@@ -1,4 +1,4 @@
-import { put } from "@vercel/blob";
+import { put, del } from "@vercel/blob";
 
 interface SlackFile {
   url_private_download: string;
@@ -43,4 +43,19 @@ export async function downloadAndStoreSlackFile(
     mimetype: file.mimetype ?? "application/octet-stream",
     isImage: file.mimetype?.startsWith("image/") ?? false,
   };
+}
+
+/**
+ * Vercel Blobのファイルを削除
+ * 
+ * @param url - Vercel Blob URL
+ */
+export async function deleteBlobFile(url: string): Promise<void> {
+  try {
+    await del(url);
+    console.log(`[Blob] ファイルを削除しました: ${url}`);
+  } catch (error) {
+    console.error(`[Blob] ファイルの削除に失敗しました: ${url}`, error);
+    // 削除失敗はエラーとして扱わない（ログのみ）
+  }
 }
