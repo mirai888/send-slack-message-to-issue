@@ -156,12 +156,16 @@ async function openIssueSelectModal(payload: SlackMessageActionPayload) {
 }
 
 async function handleSubmit(payload: SlackViewSubmissionPayload) {
+  console.log("[1] handleSubmit: 開始");
+  
   const state = payload.view.state.values;
   const issueNumber =
     state.issue.issue_select.selected_option.value;
+  console.log(`[2] handleSubmit: Issue番号を取得 - #${issueNumber}`);
 
   const meta = JSON.parse(payload.view.private_metadata);
   const slackFiles = meta.files ?? [];
+  console.log(`[3] handleSubmit: ファイル数を取得 - ${slackFiles.length}件`);
 
   const uploadedFiles: Array<{
     filename: string;
@@ -174,15 +178,22 @@ async function handleSubmit(payload: SlackViewSubmissionPayload) {
   }> = [];
 
   // ファイルごとに try/catch し、1つ失敗しても他は続行する
-  for (const file of slackFiles) {
+  for (let i = 0; i < slackFiles.length; i++) {
+    const file = slackFiles[i];
+    console.log(`[4-${i + 1}] handleSubmit: ファイル ${i + 1}/${slackFiles.length} の処理を開始 - ${file.name || file.id}`);
+    
     try {
       let fileInfo = file;
       if (!file.url_private_download && !file.url_private && file.id) {
+        console.log(`[4-${i + 1}-1] handleSubmit: Slack APIからファイル情報を再取得 - ${file.id}`);
         const fileResponse = await callSlackApi("files.info", { file: file.id });
         fileInfo = fileResponse.file;
+        console.log(`[4-${i + 1}-2] handleSubmit: ファイル情報の取得完了`);
       }
 
+      console.log(`[4-${i + 1}-3] handleSubmit: GitHubへのアップロードを開始`);
       const result = await uploadSlackFileToGitHub(fileInfo, issueNumber);
+      console.log(`[4-${i + 1}-4] handleSubmit: GitHubへのアップロード完了`);
 
       if ("url" in result) {
         uploadedFiles.push({
@@ -190,11 +201,13 @@ async function handleSubmit(payload: SlackViewSubmissionPayload) {
           url: result.url,
           mimetype: result.mimetype,
         });
+        console.log(`[4-${i + 1}-5] handleSubmit: アップロード成功 - ${result.filename}`);
       } else {
         uploadErrors.push({
           filename: result.filename,
           reason: result.reason,
         });
+        console.log(`[4-${i + 1}-5] handleSubmit: アップロードスキップ - ${result.filename}: ${result.reason}`);
       }
     } catch (e) {
       const filename = file.name || file.id || "unknown";
@@ -202,9 +215,11 @@ async function handleSubmit(payload: SlackViewSubmissionPayload) {
         filename,
         reason: e instanceof Error ? e.message : "Unknown error",
       });
+      console.log(`[4-${i + 1}-ERROR] handleSubmit: エラー発生 - ${filename}: ${e instanceof Error ? e.message : "Unknown error"}`);
     }
   }
 
+  console.log(`[5] handleSubmit: コメント本文を生成開始`);
   const body = formatIssueComment({
     text: meta.text,
     user: meta.user,
@@ -212,8 +227,11 @@ async function handleSubmit(payload: SlackViewSubmissionPayload) {
     attachments: formatAttachments(uploadedFiles),
     errors: uploadErrors,
   });
+  console.log(`[6] handleSubmit: コメント本文の生成完了 - ${body.length}文字`);
 
+  console.log(`[7] handleSubmit: Issueコメントの投稿を開始`);
   await postIssueComment(issueNumber, body);
+  console.log(`[8] handleSubmit: Issueコメントの投稿完了`);
 }
 
 function formatIssueComment({

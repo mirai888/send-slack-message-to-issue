@@ -77,12 +77,16 @@ async function createOrUpdateFileContents(
   content: string,
   message: string
 ): Promise<void> {
+  console.log(`[B1] createOrUpdateFileContents: 開始 - ${owner}/${repo}/${path}`);
+  
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
     throw new Error("GITHUB_TOKEN is not set");
   }
+  console.log("[B2] createOrUpdateFileContents: GitHub Tokenの確認完了");
 
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
+  console.log(`[B3] createOrUpdateFileContents: PUTリクエストを開始 - ${url}`);
 
   const response = await fetch(url, {
     method: "PUT",
@@ -96,11 +100,14 @@ async function createOrUpdateFileContents(
       content,
     }),
   });
+  console.log(`[B4] createOrUpdateFileContents: PUTリクエスト完了 - status: ${response.status}`);
 
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`GitHub API error: ${response.status} ${text}`);
   }
+  
+  console.log("[B5] createOrUpdateFileContents: 完了");
 }
 
 /**
@@ -114,11 +121,13 @@ export async function uploadSlackFileToGitHub(
   file: SlackFile,
   issueNumber: string
 ): Promise<UploadedAsset | UploadError> {
+  console.log(`[C1] uploadSlackFileToGitHub: 開始 - ${file.name || "file"}`);
+  
   const filename = file.name ?? "file";
   const mimetype = file.mimetype ?? "application/octet-stream";
 
   try {
-    // ファイル種別チェック
+    console.log(`[C2] uploadSlackFileToGitHub: ファイル種別チェック - ${mimetype}`);
     if (!isSupportedFileType(mimetype)) {
       return {
         filename,
@@ -126,7 +135,7 @@ export async function uploadSlackFileToGitHub(
       };
     }
 
-    // ファイルサイズチェック（事前にサイズが分かっている場合）
+    console.log(`[C3] uploadSlackFileToGitHub: ファイルサイズチェック（事前） - ${file.size || "unknown"} bytes`);
     if (file.size && file.size > MAX_FILE_SIZE) {
       return {
         filename,
@@ -134,10 +143,11 @@ export async function uploadSlackFileToGitHub(
       };
     }
 
-    // Slackファイルをダウンロード
+    console.log(`[C4] uploadSlackFileToGitHub: Slackファイルのダウンロードを開始`);
     const downloaded = await downloadSlackFile(file);
+    console.log(`[C5] uploadSlackFileToGitHub: Slackファイルのダウンロード完了 - ${downloaded.size} bytes`);
 
-    // ダウンロード後のサイズチェック
+    console.log(`[C6] uploadSlackFileToGitHub: ファイルサイズチェック（ダウンロード後）`);
     if (downloaded.size > MAX_FILE_SIZE) {
       return {
         filename,
@@ -152,12 +162,18 @@ export async function uploadSlackFileToGitHub(
     if (!owner || !repo) {
       throw new Error("GITHUB_OWNER or GITHUB_REPO is not set");
     }
+    console.log(`[C7] uploadSlackFileToGitHub: 環境変数の確認完了 - ${owner}/${repo}`);
 
+    console.log(`[C8] uploadSlackFileToGitHub: base64エンコードを開始`);
     const fileDataBase64 = downloaded.buffer.toString("base64");
+    console.log(`[C9] uploadSlackFileToGitHub: base64エンコード完了 - ${fileDataBase64.length} chars`);
+
     const randomPrefix = Math.random().toString(36).slice(-8);
     const timestamp = Date.now();
     const path = `slack_files/${issueNumber}/${timestamp}_${randomPrefix}_${downloaded.filename}`;
+    console.log(`[C10] uploadSlackFileToGitHub: ファイルパスを生成 - ${path}`);
 
+    console.log(`[C11] uploadSlackFileToGitHub: GitHubへのアップロードを開始`);
     await createOrUpdateFileContents(
       owner,
       repo,
@@ -165,18 +181,22 @@ export async function uploadSlackFileToGitHub(
       fileDataBase64,
       `Add file ${downloaded.filename} for issue #${issueNumber}`
     );
+    console.log(`[C12] uploadSlackFileToGitHub: GitHubへのアップロード完了`);
 
     const repoUrl = `https://github.com/${owner}/${repo}/blob/${branch}/${encodeURIComponent(path)}`;
     const previewUrl = `https://github.com/${owner}/${repo}/raw/${branch}/${encodeURIComponent(path)}`;
+    console.log(`[C13] uploadSlackFileToGitHub: URLを生成完了`);
 
+    console.log(`[C14] uploadSlackFileToGitHub: 完了`);
     return {
       filename: downloaded.filename,
-      url: previewUrl, // 画像プレビュー用（raw URL）
-      repoUrl, // リポジトリ内のファイルURL
+      url: previewUrl,
+      repoUrl,
       mimetype: downloaded.mimetype,
       isImage: downloaded.mimetype.startsWith("image/"),
     };
   } catch (error) {
+    console.log(`[C-ERROR] uploadSlackFileToGitHub: エラー発生 - ${error instanceof Error ? error.message : "Unknown error"}`);
     return {
       filename,
       reason: error instanceof Error ? error.message : "Unknown error",

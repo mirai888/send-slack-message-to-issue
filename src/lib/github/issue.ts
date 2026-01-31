@@ -2,6 +2,8 @@ export async function postIssueComment(
   issueNumber: string,
   body: string
 ) {
+  console.log(`[D1] postIssueComment: 開始 - Issue #${issueNumber}`);
+  
   const owner = process.env.GITHUB_OWNER;
   const repo = process.env.GITHUB_REPO;
   const token = process.env.GITHUB_TOKEN;
@@ -9,8 +11,10 @@ export async function postIssueComment(
   if (!owner || !repo || !token) {
     throw new Error("GITHUB_OWNER, GITHUB_REPO, or GITHUB_TOKEN is not set");
   }
+  console.log(`[D2] postIssueComment: 環境変数の確認完了 - ${owner}/${repo}`);
 
   const url = `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`;
+  console.log(`[D3] postIssueComment: POSTリクエストを開始 - ${url}`);
 
   const res = await fetch(url, {
     method: "POST",
@@ -21,11 +25,14 @@ export async function postIssueComment(
     },
     body: JSON.stringify({ body }),
   });
+  console.log(`[D4] postIssueComment: POSTリクエスト完了 - status: ${res.status}`);
 
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Failed to post issue comment: ${res.status} ${text}`);
   }
 
-  return await res.json();
+  const result = await res.json();
+  console.log(`[D5] postIssueComment: 完了 - comment ID: ${result.id}`);
+  return result;
 }

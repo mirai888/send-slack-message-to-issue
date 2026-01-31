@@ -36,10 +36,12 @@ export interface DownloadedFile {
 export async function downloadSlackFile(
   file: SlackFile
 ): Promise<DownloadedFile> {
+  console.log("[A1] downloadSlackFile: 開始");
+  
   const filename = file.name ?? "file";
   const mimetype = file.mimetype ?? "application/octet-stream";
+  console.log(`[A2] downloadSlackFile: ファイル情報を取得 - ${filename} (${mimetype})`);
 
-  // Bot Tokenの確認
   const botToken = process.env.SLACK_BOT_TOKEN;
   if (!botToken) {
     throw new Error("SLACK_BOT_TOKEN is not set");
@@ -50,18 +52,23 @@ export async function downloadSlackFile(
       `SLACK_BOT_TOKEN must start with 'xoxb-' (Bot Token), got: ${botToken.substring(0, 5)}...`
     );
   }
+  console.log("[A3] downloadSlackFile: Bot Tokenの確認完了");
 
   let fileInfo = file;
   if (!file.url_private_download && !file.url_private && file.id) {
+    console.log(`[A4] downloadSlackFile: Slack APIからファイル情報を再取得 - ${file.id}`);
     const fileResponse = await callSlackApi("files.info", { file: file.id });
     fileInfo = fileResponse.file;
+    console.log("[A5] downloadSlackFile: ファイル情報の取得完了");
   }
 
   const downloadUrl = fileInfo.url_private_download ?? fileInfo.url_private;
   if (!downloadUrl) {
     throw new Error(`No download URL for file: ${filename}`);
   }
+  console.log(`[A6] downloadSlackFile: ダウンロードURLを取得 - ${downloadUrl.substring(0, 50)}...`);
 
+  console.log("[A7] downloadSlackFile: fetchリクエストを開始");
   const res = await fetch(downloadUrl, {
     headers: {
       Authorization: `Bearer ${botToken}`,
@@ -69,6 +76,7 @@ export async function downloadSlackFile(
     },
     redirect: "follow",
   });
+  console.log(`[A8] downloadSlackFile: fetchリクエスト完了 - status: ${res.status}`);
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => "");
@@ -76,12 +84,14 @@ export async function downloadSlackFile(
   }
 
   const contentType = res.headers.get("content-type") ?? "";
+  console.log(`[A9] downloadSlackFile: Content-Typeを確認 - ${contentType}`);
+  
   if (contentType.includes("text/html")) {
     const text = await res.text();
     throw new Error(`Slack returned HTML instead of file: ${text.substring(0, 200)}`);
   }
 
-  // ストリーム読み込み（arrayBuffer()はPDFなどの大きめバイナリで詰まるため使用しない）
+  console.log("[A10] downloadSlackFile: ストリーム読み込みを開始");
   const chunks: Buffer[] = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const stream = Readable.fromWeb(res.body as any);
@@ -91,7 +101,9 @@ export async function downloadSlackFile(
   }
 
   const buffer = Buffer.concat(chunks);
+  console.log(`[A11] downloadSlackFile: ストリーム読み込み完了 - ${buffer.length} bytes`);
 
+  console.log("[A12] downloadSlackFile: 完了");
   return {
     filename,
     mimetype: mimetype ?? contentType,
