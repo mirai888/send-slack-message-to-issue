@@ -8,6 +8,11 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 - `SLACK_BOT_TOKEN`: Slack Bot Token（`xoxb-` で始まる）
 - `SLACK_SIGNING_SECRET`: Slack App の Signing Secret
 - `GITHUB_TOKEN`: GitHub Personal Access Token または GitHub App Token
+  - **Classic Token の場合**: `repo` スコープが必要
+  - **Fine-grained Token の場合**: 以下の権限が必要
+    - `Contents`: Read and write（ファイルの読み書き）
+    - `Issues`: Read and write（Issueコメントの投稿）
+    - `Metadata`: Read only（リポジトリ情報の取得）
 - `GITHUB_OWNER`: GitHub リポジトリのオーナー名（ユーザー名または組織名）
   - 例: `octocat`（個人アカウントの場合）
   - 例: `github`（組織アカウントの場合）

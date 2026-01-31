@@ -70,55 +70,6 @@ function isSupportedFileType(mimetype: string): boolean {
  * @param content - base64エンコードされたファイル内容
  * @param message - コミットメッセージ
  */
-/**
- * リポジトリの存在確認
- */
-async function checkRepositoryExists(
-  owner: string,
-  repo: string
-): Promise<{ exists: boolean; status: number; message?: string }> {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) {
-    throw new Error("GITHUB_TOKEN is not set");
-  }
-
-  const url = `https://api.github.com/repos/${owner}/${repo}`;
-  
-  console.info(`[GitHub Upload] GET ${url} (checking repository existence)`);
-
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github.v3+json",
-    },
-  });
-
-  const exists = response.ok;
-  if (!exists) {
-    let errorText = "";
-    try {
-      const errorJson = await response.json();
-      errorText = errorJson.message || JSON.stringify(errorJson);
-    } catch {
-      errorText = await response.text().catch(() => "");
-    }
-    console.error(`[GitHub Upload] Repository check failed: ${response.status} ${response.statusText}`);
-    console.error(`[GitHub Upload] Error message: ${errorText.substring(0, 200)}`);
-    
-    return {
-      exists: false,
-      status: response.status,
-      message: errorText,
-    };
-  }
-
-  return {
-    exists: true,
-    status: response.status,
-  };
-}
-
 async function createOrUpdateFileContents(
   owner: string,
   repo: string,
@@ -131,42 +82,8 @@ async function createOrUpdateFileContents(
     throw new Error("GITHUB_TOKEN is not set");
   }
 
-  // リポジトリの存在確認
-  console.info(`[GitHub Upload] Checking if repository ${owner}/${repo} exists...`);
-  const repoCheckResult = await checkRepositoryExists(owner, repo);
-  console.info(`[GitHub Upload] Repository ${owner}/${repo} exists: ${repoCheckResult.exists}`);
-  
-  if (!repoCheckResult.exists) {
-    const mainRepo = process.env.GITHUB_REPO;
-    let errorMessage = `Repository ${owner}/${repo} does not exist or you don't have access to it.`;
-    
-    if (repoCheckResult.status === 404) {
-      errorMessage += `\n\n404 Not Found - The repository does not exist.`;
-      errorMessage += `\nPlease verify:`;
-      errorMessage += `\n  1. Repository name is correct: ${owner}/${repo}`;
-      errorMessage += `\n  2. Repository exists on GitHub`;
-      errorMessage += `\n  3. GITHUB_OWNER=${owner} is correct`;
-      errorMessage += `\n  4. GITHUB_REPO=${mainRepo} is correct`;
-    } else if (repoCheckResult.status === 403) {
-      errorMessage += `\n\n403 Forbidden - You don't have access to this repository.`;
-      errorMessage += `\nPlease check:`;
-      errorMessage += `\n  1. Your GitHub token has access to ${owner}/${repo}`;
-      errorMessage += `\n  2. The token has the 'repo' scope`;
-      errorMessage += `\n  3. If it's a private repository, the token has access to it`;
-    } else {
-      errorMessage += `\n\nHTTP ${repoCheckResult.status}: ${repoCheckResult.message || 'Unknown error'}`;
-    }
-    
-    if (process.env.GITHUB_ASSETS_REPO) {
-      errorMessage += `\n\nNote: You have GITHUB_ASSETS_REPO=${process.env.GITHUB_ASSETS_REPO} set.`;
-      errorMessage += `\nTo use the main repository instead, remove GITHUB_ASSETS_REPO environment variable.`;
-    } else {
-      errorMessage += `\n\nThis is the main repository (${owner}/${repo}).`;
-      errorMessage += `\nPlease ensure the repository exists and your GitHub token has write access.`;
-    }
-    
-    throw new Error(errorMessage);
-  }
+  // リポジトリの存在確認はスキップ（直接アップロードを試行し、エラー時に詳細なメッセージを表示）
+  // Serverless環境で存在確認のfetchが詰まる可能性があるため
 
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
 
@@ -188,17 +105,47 @@ async function createOrUpdateFileContents(
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
+    let errorText = "";
+    try {
+      const errorJson = await response.json();
+      errorText = errorJson.message || JSON.stringify(errorJson);
+    } catch {
+      errorText = await response.text().catch(() => "");
+    }
+    
     let errorMessage = `GitHub API error: ${response.status} ${response.statusText}`;
     
     if (response.status === 404) {
-      errorMessage += ` - Repository ${owner}/${repo} not found or you don't have access. `;
-      errorMessage += `Please ensure the repository exists and your token has write access.`;
+      errorMessage += ` - Repository ${owner}/${repo} not found or you don't have access.`;
+      errorMessage += `\nPlease ensure:`;
+      errorMessage += `\n  1. The repository exists`;
+      errorMessage += `\n  2. Your GitHub token has access to the repository`;
     } else if (response.status === 403) {
-      errorMessage += ` - Access denied. Check your token permissions.`;
+      errorMessage += ` - Access denied.`;
+      errorMessage += `\n\n⚠️ IMPORTANT: To upload files to GitHub, your token needs proper permissions.`;
+      errorMessage += `\n\nRequired permissions:`;
+      errorMessage += `\n\nFor Classic Personal Access Tokens:`;
+      errorMessage += `\n  ✅ 'repo' scope (Full control of private repositories) - REQUIRED for file uploads`;
+      errorMessage += `\n  ✅ 'issues' scope (Read and Write access to issues) - Already have`;
+      errorMessage += `\n\nFor Fine-grained Personal Access Tokens:`;
+      errorMessage += `\n  ✅ 'Contents': Read and write (ファイルの読み書きに必要)`;
+      errorMessage += `\n  ✅ 'Issues': Read and write (Issueコメントの投稿に必要)`;
+      errorMessage += `\n  ✅ 'Metadata': Read only (リポジトリ情報の取得に必要)`;
+      errorMessage += `\n\nTo fix this:`;
+      errorMessage += `\n  1. Go to GitHub Settings > Developer settings > Personal access tokens`;
+      errorMessage += `\n  2. Edit your token:`;
+      errorMessage += `\n     - Classic Token: Add 'repo' scope`;
+      errorMessage += `\n     - Fine-grained Token: Add 'Contents' permission (Read and write)`;
+      errorMessage += `\n  3. Make sure the token has access to the repository: ${owner}/${repo}`;
+      errorMessage += `\n  4. Update GITHUB_TOKEN environment variable with the new token`;
+      errorMessage += `\n\nNote: If you can't add required permissions due to organization policies,`;
+      errorMessage += `\n  you may need to use a GitHub App instead of a Personal Access Token.`;
+    } else if (response.status === 422) {
+      errorMessage += ` - Unprocessable Entity.`;
+      errorMessage += `\nThis usually means the file path is invalid or the branch doesn't exist.`;
     }
     
-    errorMessage += ` Response: ${errorText}`;
+    errorMessage += `\n\nResponse: ${errorText.substring(0, 300)}`;
     
     console.error(`[GitHub Upload] ${errorMessage}`);
     throw new Error(errorMessage);
