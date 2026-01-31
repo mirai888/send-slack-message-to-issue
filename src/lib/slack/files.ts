@@ -26,41 +26,52 @@ export async function downloadAndStoreSlackFile(
     throw new Error(`No file ID for: ${filename}`);
   }
 
-  console.log(`[Slack File] Getting public URL for file ID: ${file.id}`);
+  console.log(`[Slack File] Getting file info for file ID: ${file.id}`);
 
-  // files.sharedPublicURL APIを使って公開URLを取得
+  // files.info APIを使ってファイル情報を取得
   let downloadUrl: string;
+  let finalMimetype = mimetype;
+  
   try {
-    const result = await callSlackApi("files.sharedPublicURL", {
+    const result = await callSlackApi("files.info", {
       file: file.id,
     });
 
-    downloadUrl = result.file?.permalink_public ?? result.file?.url_private_download;
+    console.log(`[Slack File] files.info response:`, {
+      hasFile: !!result.file,
+      urlPrivateDownload: !!result.file?.url_private_download,
+      urlPrivate: !!result.file?.url_private,
+      mimetype: result.file?.mimetype,
+    });
+
+    // files.info APIから取得したURLを使用
+    downloadUrl = result.file?.url_private_download ?? result.file?.url_private;
+    finalMimetype = result.file?.mimetype ?? mimetype;
     
     if (!downloadUrl) {
-      throw new Error(`No public URL returned from files.sharedPublicURL`);
+      throw new Error(`No download URL in files.info response`);
     }
 
-    console.log(`[Slack File] Got public URL: ${downloadUrl.substring(0, 50)}...`);
+    console.log(`[Slack File] Got download URL from files.info: ${downloadUrl.substring(0, 50)}...`);
   } catch (e) {
-    console.error(`[Slack File] files.sharedPublicURL failed:`, e);
-    // フォールバック: プライベートURLを使用（認証付き）
+    console.error(`[Slack File] files.info failed:`, e);
+    // フォールバック: payloadから取得したURLを使用
     downloadUrl = file.url_private_download ?? file.url_private ?? "";
     if (!downloadUrl) {
       throw new Error(`No download URL for file: ${filename}`);
     }
-    console.log(`[Slack File] Falling back to private URL: ${downloadUrl.substring(0, 50)}...`);
+    console.log(`[Slack File] Falling back to URL from payload: ${downloadUrl.substring(0, 50)}...`);
   }
 
   console.log(`[Slack File] Downloading: ${filename} from ${downloadUrl.substring(0, 50)}...`);
 
-  // 公開URLの場合は認証不要、プライベートURLの場合は認証が必要
-  const headers: HeadersInit = {};
-  if (downloadUrl.includes("files-pri")) {
-    headers.Authorization = `Bearer ${process.env.SLACK_BOT_TOKEN}`;
-  }
-
-  const res = await fetch(downloadUrl, { headers });
+  // SlackのプライベートファイルURLにアクセスするには、Bot Tokenが必要
+  // ただし、URLの形式が正しくないとHTMLが返ってくる
+  const res = await fetch(downloadUrl, {
+    headers: {
+      Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`,
+    },
+  });
 
   console.log(`[Slack File] Response status: ${res.status}, content-type: ${res.headers.get("content-type")}`);
 
@@ -85,15 +96,15 @@ export async function downloadAndStoreSlackFile(
 
   const blob = await put(`slack/${Date.now()}-${filename}`, buffer, {
     access: "public",
-    contentType: mimetype,
+    contentType: finalMimetype ?? mimetype,
   });
 
-  const finalMimetype = mimetype ?? "application/octet-stream";
+  const finalMimetypeForReturn = finalMimetype ?? mimetype ?? "application/octet-stream";
 
   return {
     filename,
     url: blob.url,
-    mimetype: finalMimetype,
-    isImage: finalMimetype.startsWith("image/"),
+    mimetype: finalMimetypeForReturn,
+    isImage: finalMimetypeForReturn.startsWith("image/"),
   };
 }
