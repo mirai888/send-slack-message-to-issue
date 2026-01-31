@@ -7,6 +7,49 @@ import { formatAttachments } from "@/lib/github/formatAttachments";
 
 export const runtime = "nodejs";
 
+interface SlackFile {
+  id?: string;
+  name?: string;
+  url_private_download?: string;
+  mimetype?: string;
+}
+
+interface MessageActionPayload {
+  type: "message_action";
+  trigger_id: string;
+  user: {
+    id: string;
+    username?: string;
+  };
+  channel: {
+    id: string;
+    name?: string;
+  };
+  message: {
+    text?: string;
+    files?: SlackFile[];
+  };
+}
+
+interface ViewSubmissionPayload {
+  type: "view_submission";
+  view: {
+    state: {
+      values: {
+        issue: {
+          issue_select: {
+            selected_option: {
+              value: string;
+            };
+          };
+        };
+      };
+    };
+    private_metadata: string;
+  };
+}
+
+type SlackPayload = MessageActionPayload | ViewSubmissionPayload | { type: string };
 
 export async function POST(req: Request) {
   const rawBody = await req.text();
@@ -16,17 +59,17 @@ export async function POST(req: Request) {
   }
 
   const params = new URLSearchParams(rawBody);
-  const payload = JSON.parse(params.get("payload") || "{}");
+  const payload = JSON.parse(params.get("payload") || "{}") as SlackPayload;
 
   // ① Message Action → モーダル
   if (payload.type === "message_action") {
-    await openIssueSelectModal(payload);
+    await openIssueSelectModal(payload as MessageActionPayload);
     return new Response("", { status: 200 });
   }
 
   // ② モーダル送信 → Issue投稿
   if (payload.type === "view_submission") {
-    await handleSubmit(payload);
+    await handleSubmit(payload as ViewSubmissionPayload);
     return new Response(
       JSON.stringify({ response_action: "clear" }),
       { status: 200, headers: { "content-type": "application/json" } }
@@ -38,9 +81,9 @@ export async function POST(req: Request) {
 
 /* ---------- handlers ---------- */
 
-async function openIssueSelectModal(payload: any) {
+async function openIssueSelectModal(payload: MessageActionPayload) {
   // private_metadataは3000文字制限があるため、ファイル情報を最小限に絞る
-  const files = (payload.message.files ?? []).map((file: any) => ({
+  const files = (payload.message.files ?? []).map((file: SlackFile) => ({
     id: file.id,
     name: file.name,
     url_private_download: file.url_private_download,
@@ -62,9 +105,11 @@ async function openIssueSelectModal(payload: any) {
       `[Slack API] private_metadataが大きすぎます: ${metadataString.length}文字。ファイル情報を削減します。`
     );
     // ファイル情報をさらに削減（idとnameのみ）
-    const minimalFiles = files.map((file: any) => ({
+    const minimalFiles = files.map((file: SlackFile) => ({
       id: file.id,
       name: file.name,
+      url_private_download: undefined,
+      mimetype: undefined,
     }));
     meta.files = minimalFiles;
     
@@ -107,7 +152,7 @@ async function openIssueSelectModal(payload: any) {
   });
 }
 
-async function handleSubmit(payload: any) {
+async function handleSubmit(payload: ViewSubmissionPayload) {
   const state = payload.view.state.values;
   const issueNumber =
     state.issue.issue_select.selected_option.value;
@@ -128,10 +173,12 @@ async function handleSubmit(payload: any) {
 
   for (const file of slackFiles) {
     // ファイル情報が不完全な場合（IDのみの場合）、files.info APIで情報を取得
-    let fileInfo = file;
+    let fileInfo: SlackFile = file;
     if (file.id && (!file.url_private_download || !file.mimetype)) {
       try {
-        const fileResponse = await callSlackApi("files.info", { file: file.id });
+        const fileResponse = await callSlackApi("files.info", { file: file.id }) as {
+          file: SlackFile;
+        };
         fileInfo = {
           id: file.id,
           name: fileResponse.file.name ?? file.name,
@@ -148,9 +195,25 @@ async function handleSubmit(payload: any) {
         continue;
       }
     }
+    
+    // url_private_downloadが必須のため、存在しない場合はスキップ
+    if (!fileInfo.url_private_download) {
+      const filename = fileInfo.name || fileInfo.id || "unknown";
+      uploadErrors.push({
+        filename,
+        reason: "ダウンロードURLが取得できませんでした",
+      });
+      console.error("file upload skipped: no download URL", filename);
+      continue;
+    }
+    
     try {
       // 1. SlackからダウンロードしてVercel Blobに保存
-      const blobFile = await downloadAndStoreSlackFile(fileInfo);
+      const blobFile = await downloadAndStoreSlackFile({
+        url_private_download: fileInfo.url_private_download,
+        name: fileInfo.name,
+        mimetype: fileInfo.mimetype,
+      });
       
       // 2. Vercel BlobからダウンロードしてGitHubにアップロード
       const result = await uploadBlobFileToGitHub(
