@@ -1,6 +1,8 @@
 import { put } from "@vercel/blob";
+import { callSlackApi } from "./slackApi";
 
 interface SlackFile {
+  id?: string;
   url_private_download?: string;
   url_private?: string;
   name?: string;
@@ -17,17 +19,61 @@ interface UploadedFile {
 export async function downloadAndStoreSlackFile(
   file: SlackFile
 ): Promise<UploadedFile> {
-  // url_private_download がない場合は url_private を使用
-  const url = file.url_private_download ?? file.url_private;
   const filename = file.name ?? "file";
+  console.log(`[Slack File] Processing file:`, {
+    id: file.id,
+    name: filename,
+    hasUrlPrivateDownload: !!file.url_private_download,
+    hasUrlPrivate: !!file.url_private,
+    mimetype: file.mimetype,
+  });
 
-  if (!url) {
-    throw new Error(`No download URL for file: ${filename}`);
+  let downloadUrl: string;
+  let mimetype = file.mimetype;
+
+  // ファイルIDがある場合は files.info API で情報を取得
+  if (file.id) {
+    console.log(`[Slack File] Fetching file info for ID: ${file.id}`);
+    try {
+      const fileInfo = await callSlackApi("files.info", {
+        file: file.id,
+      });
+
+      console.log(`[Slack File] files.info response:`, {
+        hasFile: !!fileInfo.file,
+        urlPrivateDownload: !!fileInfo.file?.url_private_download,
+        urlPrivate: !!fileInfo.file?.url_private,
+        mimetype: fileInfo.file?.mimetype,
+      });
+
+      downloadUrl = fileInfo.file?.url_private_download ?? fileInfo.file?.url_private;
+      mimetype = fileInfo.file?.mimetype ?? mimetype;
+
+      if (!downloadUrl) {
+        throw new Error(`No download URL in file info for: ${filename}`);
+      }
+
+      console.log(`[Slack File] Got download URL from files.info API`);
+    } catch (e) {
+      console.error(`[Slack File] files.info failed, falling back to direct URL:`, e);
+      // フォールバック: 直接URLを使用
+      downloadUrl = file.url_private_download ?? file.url_private ?? "";
+      if (!downloadUrl) {
+        throw new Error(`No download URL for file: ${filename}`);
+      }
+    }
+  } else {
+    // ファイルIDがない場合は直接URLを使用
+    downloadUrl = file.url_private_download ?? file.url_private ?? "";
+    if (!downloadUrl) {
+      throw new Error(`No download URL for file: ${filename}`);
+    }
+    console.log(`[Slack File] Using direct URL (no file ID)`);
   }
 
-  console.log(`[Slack File] Downloading: ${filename} from ${url.substring(0, 50)}...`);
+  console.log(`[Slack File] Downloading: ${filename} from ${downloadUrl.substring(0, 50)}...`);
 
-  const res = await fetch(url, {
+  const res = await fetch(downloadUrl, {
     headers: {
       Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`,
     },
@@ -56,13 +102,15 @@ export async function downloadAndStoreSlackFile(
 
   const blob = await put(`slack/${Date.now()}-${filename}`, buffer, {
     access: "public",
-    contentType: file.mimetype,
+    contentType: mimetype,
   });
+
+  const finalMimetype = mimetype ?? "application/octet-stream";
 
   return {
     filename,
     url: blob.url,
-    mimetype: file.mimetype ?? "application/octet-stream",
-    isImage: file.mimetype?.startsWith("image/") ?? false,
+    mimetype: finalMimetype,
+    isImage: finalMimetype.startsWith("image/"),
   };
 }

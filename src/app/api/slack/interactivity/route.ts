@@ -82,6 +82,9 @@ async function handleSubmit(payload: any) {
 
   // 添付ファイル処理
   const slackFiles = meta.files ?? [];
+  console.log(`[Interactivity] Processing ${slackFiles.length} files`);
+  console.log(`[Interactivity] File objects:`, JSON.stringify(slackFiles, null, 2));
+
   const uploadedFiles: Array<{
     filename: string;
     url: string;
