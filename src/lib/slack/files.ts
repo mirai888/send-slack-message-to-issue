@@ -1,5 +1,4 @@
 import { put } from "@vercel/blob";
-import { callSlackApi } from "./slackApi";
 
 interface SlackFile {
   id?: string;
@@ -26,50 +25,19 @@ export async function downloadAndStoreSlackFile(
     hasUrlPrivateDownload: !!file.url_private_download,
     hasUrlPrivate: !!file.url_private,
     mimetype: file.mimetype,
+    fullFileObject: JSON.stringify(file),
   });
 
-  let downloadUrl: string;
-  let mimetype = file.mimetype;
+  // 直接URLを使用（files.info APIは使わない）
+  // payload.message.files には既に url_private_download が含まれている
+  const downloadUrl = file.url_private_download ?? file.url_private;
+  const mimetype = file.mimetype;
 
-  // ファイルIDがある場合は files.info API で情報を取得
-  if (file.id) {
-    console.log(`[Slack File] Fetching file info for ID: ${file.id}`);
-    try {
-      const fileInfo = await callSlackApi("files.info", {
-        file: file.id,
-      });
-
-      console.log(`[Slack File] files.info response:`, {
-        hasFile: !!fileInfo.file,
-        urlPrivateDownload: !!fileInfo.file?.url_private_download,
-        urlPrivate: !!fileInfo.file?.url_private,
-        mimetype: fileInfo.file?.mimetype,
-      });
-
-      downloadUrl = fileInfo.file?.url_private_download ?? fileInfo.file?.url_private;
-      mimetype = fileInfo.file?.mimetype ?? mimetype;
-
-      if (!downloadUrl) {
-        throw new Error(`No download URL in file info for: ${filename}`);
-      }
-
-      console.log(`[Slack File] Got download URL from files.info API`);
-    } catch (e) {
-      console.error(`[Slack File] files.info failed, falling back to direct URL:`, e);
-      // フォールバック: 直接URLを使用
-      downloadUrl = file.url_private_download ?? file.url_private ?? "";
-      if (!downloadUrl) {
-        throw new Error(`No download URL for file: ${filename}`);
-      }
-    }
-  } else {
-    // ファイルIDがない場合は直接URLを使用
-    downloadUrl = file.url_private_download ?? file.url_private ?? "";
-    if (!downloadUrl) {
-      throw new Error(`No download URL for file: ${filename}`);
-    }
-    console.log(`[Slack File] Using direct URL (no file ID)`);
+  if (!downloadUrl) {
+    throw new Error(`No download URL for file: ${filename}`);
   }
+
+  console.log(`[Slack File] Using direct URL: ${downloadUrl.substring(0, 50)}...`);
 
   console.log(`[Slack File] Downloading: ${filename} from ${downloadUrl.substring(0, 50)}...`);
 
