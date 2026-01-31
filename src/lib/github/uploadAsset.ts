@@ -76,13 +76,15 @@ function isSupportedFileType(mimetype: string): boolean {
 async function checkRepositoryExists(
   owner: string,
   repo: string
-): Promise<boolean> {
+): Promise<{ exists: boolean; status: number; message?: string }> {
   const token = process.env.GITHUB_TOKEN;
   if (!token) {
     throw new Error("GITHUB_TOKEN is not set");
   }
 
   const url = `https://api.github.com/repos/${owner}/${repo}`;
+  
+  console.info(`[GitHub Upload] GET ${url} (checking repository existence)`);
 
   const response = await fetch(url, {
     method: "GET",
@@ -92,7 +94,29 @@ async function checkRepositoryExists(
     },
   });
 
-  return response.ok;
+  const exists = response.ok;
+  if (!exists) {
+    let errorText = "";
+    try {
+      const errorJson = await response.json();
+      errorText = errorJson.message || JSON.stringify(errorJson);
+    } catch {
+      errorText = await response.text().catch(() => "");
+    }
+    console.error(`[GitHub Upload] Repository check failed: ${response.status} ${response.statusText}`);
+    console.error(`[GitHub Upload] Error message: ${errorText.substring(0, 200)}`);
+    
+    return {
+      exists: false,
+      status: response.status,
+      message: errorText,
+    };
+  }
+
+  return {
+    exists: true,
+    status: response.status,
+  };
 }
 
 async function createOrUpdateFileContents(
@@ -108,16 +132,34 @@ async function createOrUpdateFileContents(
   }
 
   // リポジトリの存在確認
-  const repoExists = await checkRepositoryExists(owner, repo);
-  if (!repoExists) {
+  console.info(`[GitHub Upload] Checking if repository ${owner}/${repo} exists...`);
+  const repoCheckResult = await checkRepositoryExists(owner, repo);
+  console.info(`[GitHub Upload] Repository ${owner}/${repo} exists: ${repoCheckResult.exists}`);
+  
+  if (!repoCheckResult.exists) {
     const mainRepo = process.env.GITHUB_REPO;
     let errorMessage = `Repository ${owner}/${repo} does not exist or you don't have access to it.`;
     
+    if (repoCheckResult.status === 404) {
+      errorMessage += `\n\n404 Not Found - The repository does not exist.`;
+      errorMessage += `\nPlease verify:`;
+      errorMessage += `\n  1. Repository name is correct: ${owner}/${repo}`;
+      errorMessage += `\n  2. Repository exists on GitHub`;
+      errorMessage += `\n  3. GITHUB_OWNER=${owner} is correct`;
+      errorMessage += `\n  4. GITHUB_REPO=${mainRepo} is correct`;
+    } else if (repoCheckResult.status === 403) {
+      errorMessage += `\n\n403 Forbidden - You don't have access to this repository.`;
+      errorMessage += `\nPlease check:`;
+      errorMessage += `\n  1. Your GitHub token has access to ${owner}/${repo}`;
+      errorMessage += `\n  2. The token has the 'repo' scope`;
+      errorMessage += `\n  3. If it's a private repository, the token has access to it`;
+    } else {
+      errorMessage += `\n\nHTTP ${repoCheckResult.status}: ${repoCheckResult.message || 'Unknown error'}`;
+    }
+    
     if (process.env.GITHUB_ASSETS_REPO) {
-      errorMessage += `\n\nYou have GITHUB_ASSETS_REPO=${process.env.GITHUB_ASSETS_REPO} set.`;
-      errorMessage += `\nEither:`;
-      errorMessage += `\n  1. Create the repository ${owner}/${repo}, or`;
-      errorMessage += `\n  2. Remove GITHUB_ASSETS_REPO environment variable to use the main repository (${owner}/${mainRepo || 'GITHUB_REPO'})`;
+      errorMessage += `\n\nNote: You have GITHUB_ASSETS_REPO=${process.env.GITHUB_ASSETS_REPO} set.`;
+      errorMessage += `\nTo use the main repository instead, remove GITHUB_ASSETS_REPO environment variable.`;
     } else {
       errorMessage += `\n\nThis is the main repository (${owner}/${repo}).`;
       errorMessage += `\nPlease ensure the repository exists and your GitHub token has write access.`;
