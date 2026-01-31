@@ -69,15 +69,18 @@ export async function downloadSlackFile(
   console.log(`[A6] downloadSlackFile: ダウンロードURLを取得 - ${downloadUrl.substring(0, 50)}...`);
 
   console.log("[A7] downloadSlackFile: fetchリクエストを開始");
+  console.log(`[A7-1] downloadSlackFile: ダウンロードURL - ${downloadUrl}`);
   
   // タイムアウト設定（30秒）
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
+    console.log("[A7-TIMEOUT] downloadSlackFile: タイムアウト発生（30秒経過）");
     controller.abort();
   }, 30000);
   
   let res: Response;
   try {
+    console.log("[A7-2] downloadSlackFile: fetch実行中...");
     res = await fetch(downloadUrl, {
       headers: {
         Authorization: `Bearer ${botToken}`,
@@ -88,8 +91,11 @@ export async function downloadSlackFile(
     });
     clearTimeout(timeoutId);
     console.log(`[A8] downloadSlackFile: fetchリクエスト完了 - status: ${res.status}`);
+    console.log(`[A8-1] downloadSlackFile: Response headers - ${JSON.stringify(Object.fromEntries(res.headers.entries()))}`);
   } catch (error) {
     clearTimeout(timeoutId);
+    console.log(`[A7-ERROR] downloadSlackFile: エラー発生 - ${error instanceof Error ? error.message : "Unknown error"}`);
+    console.log(`[A7-ERROR-2] downloadSlackFile: エラー詳細 - ${error instanceof Error ? error.stack : "No stack trace"}`);
     if (error instanceof Error && error.name === "AbortError") {
       throw new Error("Slack download timeout: Request took longer than 30 seconds");
     }
