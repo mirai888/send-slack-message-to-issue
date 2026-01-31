@@ -1,4 +1,5 @@
 import { put } from "@vercel/blob";
+import { callSlackApi } from "./slackApi";
 
 interface SlackFile {
   id?: string;
@@ -33,6 +34,18 @@ export async function downloadAndStoreSlackFile(
 
   if (!botToken.startsWith("xoxb-")) {
     throw new Error(`SLACK_BOT_TOKEN must start with 'xoxb-' (Bot Token), got: ${tokenPrefix}...`);
+  }
+
+  // Bot Tokenのスコープを確認
+  try {
+    const authTest = await callSlackApi("auth.test", {});
+    console.log(`[Slack File] Bot Token info:`, {
+      user: authTest.user,
+      team: authTest.team,
+      url: authTest.url,
+    });
+  } catch (e) {
+    console.error(`[Slack File] auth.test failed:`, e);
   }
 
   // url_private_download を直接使用（Bearer認証必須）
