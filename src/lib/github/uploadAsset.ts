@@ -152,13 +152,14 @@ async function uploadToGitHubS3(
   console.log(`[GitHub S3] Uploading ${filename} to ${uploadUrl.substring(0, 50)}...`);
 
   // 署名付きURLにPUTリクエストでファイルをアップロード
+  // BufferをUint8Arrayに変換（fetchのbodyはBodyInit型が必要）
   const uploadResponse = await fetch(uploadUrl, {
     method: "PUT",
     headers: {
       "Content-Type": mimetype,
       "Content-Length": buffer.length.toString(),
     },
-    body: buffer,
+    body: new Uint8Array(buffer),
   });
 
   if (!uploadResponse.ok) {
