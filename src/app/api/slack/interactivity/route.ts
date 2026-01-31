@@ -73,8 +73,14 @@ export async function POST(req: Request) {
     // Slackには即レスポンス（3秒制限対応）
     // Promiseを作成して即ACK（queueMicrotaskは使わない - Serverless環境でプロセスが途中で終了するため）
     handleSubmit(payload)
-      .then(() => console.info("[Submit] Done"))
-      .catch((e) => console.error("[Submit] Failed", e));
+      .then(() => console.info("[Submit] Successfully completed"))
+      .catch((e) => {
+        console.error("[Submit] Failed with error:", e);
+        if (e instanceof Error) {
+          console.error("[Submit] Error message:", e.message);
+          console.error("[Submit] Error stack:", e.stack);
+        }
+      });
 
     return new Response(
       JSON.stringify({ response_action: "clear" }),
@@ -150,15 +156,19 @@ async function openIssueSelectModal(payload: SlackMessageActionPayload) {
 }
 
 async function handleSubmit(payload: SlackViewSubmissionPayload) {
+  console.info("[Interactivity] handleSubmit started");
+  
   const state = payload.view.state.values;
   const issueNumber =
     state.issue.issue_select.selected_option.value;
+
+  console.info(`[Interactivity] Target issue: #${issueNumber}`);
 
   const meta = JSON.parse(payload.view.private_metadata);
 
   // 添付ファイル処理（GitHubに直接アップロード）
   const slackFiles = meta.files ?? [];
-  console.log(`[Interactivity] Processing ${slackFiles.length} files for issue #${issueNumber}`);
+  console.info(`[Interactivity] Processing ${slackFiles.length} files for issue #${issueNumber}`);
 
   const uploadedFiles: Array<{
     filename: string;
@@ -212,6 +222,9 @@ async function handleSubmit(payload: SlackViewSubmissionPayload) {
   }
 
   // Issueコメント本文を生成
+  console.info(`[Interactivity] Formatting comment for issue #${issueNumber}`);
+  console.info(`[Interactivity] Uploaded files: ${uploadedFiles.length}, Errors: ${uploadErrors.length}`);
+  
   const body = formatIssueComment({
     text: meta.text,
     user: meta.user,
@@ -220,7 +233,17 @@ async function handleSubmit(payload: SlackViewSubmissionPayload) {
     errors: uploadErrors,
   });
 
-  await postIssueComment(issueNumber, body);
+  console.info(`[Interactivity] Posting comment to issue #${issueNumber}`);
+  console.info(`[Interactivity] Comment body length: ${body.length} chars`);
+  console.debug(`[Interactivity] Comment body preview: ${body.substring(0, 200)}...`);
+  
+  try {
+    await postIssueComment(issueNumber, body);
+    console.info(`[Interactivity] Successfully posted comment to issue #${issueNumber}`);
+  } catch (error) {
+    console.error(`[Interactivity] Failed to post comment to issue #${issueNumber}:`, error);
+    throw error; // エラーを再スローして上位でキャッチされるようにする
+  }
 }
 
 function formatIssueComment({

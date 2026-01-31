@@ -70,6 +70,31 @@ function isSupportedFileType(mimetype: string): boolean {
  * @param content - base64エンコードされたファイル内容
  * @param message - コミットメッセージ
  */
+/**
+ * リポジトリの存在確認
+ */
+async function checkRepositoryExists(
+  owner: string,
+  repo: string
+): Promise<boolean> {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) {
+    throw new Error("GITHUB_TOKEN is not set");
+  }
+
+  const url = `https://api.github.com/repos/${owner}/${repo}`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github.v3+json",
+    },
+  });
+
+  return response.ok;
+}
+
 async function createOrUpdateFileContents(
   owner: string,
   repo: string,
@@ -82,7 +107,18 @@ async function createOrUpdateFileContents(
     throw new Error("GITHUB_TOKEN is not set");
   }
 
+  // リポジトリの存在確認
+  const repoExists = await checkRepositoryExists(owner, repo);
+  if (!repoExists) {
+    throw new Error(
+      `Repository ${owner}/${repo} does not exist or you don't have access to it. ` +
+      `Please create the repository first or check GITHUB_ASSETS_REPO environment variable.`
+    );
+  }
+
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
+
+  console.info(`[GitHub Upload] PUT ${url}`);
 
   const response = await fetch(url, {
     method: "PUT",
@@ -101,10 +137,23 @@ async function createOrUpdateFileContents(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(
-      `GitHub API error: ${response.status} ${response.statusText} - ${errorText}`
-    );
+    let errorMessage = `GitHub API error: ${response.status} ${response.statusText}`;
+    
+    if (response.status === 404) {
+      errorMessage += ` - Repository ${owner}/${repo} not found or you don't have access. `;
+      errorMessage += `Please ensure the repository exists and your token has write access.`;
+    } else if (response.status === 403) {
+      errorMessage += ` - Access denied. Check your token permissions.`;
+    }
+    
+    errorMessage += ` Response: ${errorText}`;
+    
+    console.error(`[GitHub Upload] ${errorMessage}`);
+    throw new Error(errorMessage);
   }
+
+  const result = await response.json();
+  console.info(`[GitHub Upload] Successfully uploaded file, commit SHA: ${result.commit.sha}`);
 }
 
 /**
@@ -151,12 +200,25 @@ export async function uploadSlackFileToGitHub(
 
     // 環境変数の取得
     const owner = process.env.GITHUB_OWNER!;
-    const assetsRepo = process.env.GITHUB_ASSETS_REPO || `${process.env.GITHUB_REPO}-assets`;
+    const mainRepo = process.env.GITHUB_REPO;
+    // GITHUB_ASSETS_REPO が指定されていない場合は、メインリポジトリを使用
+    const assetsRepo = process.env.GITHUB_ASSETS_REPO || mainRepo;
     const assetsBranch = process.env.GITHUB_ASSETS_BRANCH || "main";
 
     if (!owner) {
       throw new Error("GITHUB_OWNER is not set");
     }
+
+    if (!assetsRepo) {
+      throw new Error(
+        "GITHUB_REPO is not set. " +
+        "Please set GITHUB_REPO environment variable, or set GITHUB_ASSETS_REPO to use a separate repository."
+      );
+    }
+
+    console.info(
+      `[Upload Asset] Using assets repository: ${owner}/${assetsRepo} (branch: ${assetsBranch})`
+    );
 
     // ファイルをbase64エンコード
     const fileDataBase64 = downloaded.buffer.toString("base64");
