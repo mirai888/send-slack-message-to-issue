@@ -37,7 +37,7 @@ async function searchIssues(query: string) {
 
   const json = await res.json();
 
-  return json.items.map((it: any) => ({
+  return json.items.map((it: { number: number; title: string }) => ({
     text: {
       type: "plain_text",
       text: `#${it.number} ${it.title}`.slice(0, 75),
