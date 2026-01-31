@@ -1,6 +1,7 @@
 import { verifySlackRequest } from "@/lib/slack/verify";
 import { callSlackApi } from "@/lib/slack/slackApi";
 import { downloadAndStoreSlackFile } from "@/lib/slack/files";
+import { uploadBlobFileToGitHub } from "@/lib/github/uploadAsset";
 import { postIssueComment } from "@/lib/github/issue";
 import { formatAttachments } from "@/lib/github/formatAttachments";
 
@@ -88,13 +89,45 @@ async function handleSubmit(payload: any) {
     url: string;
     isImage: boolean;
   }> = [];
+  const uploadErrors: Array<{
+    filename: string;
+    reason: string;
+  }> = [];
 
   for (const file of slackFiles) {
     try {
-      const uploaded = await downloadAndStoreSlackFile(file);
-      uploadedFiles.push(uploaded);
+      // 1. SlackからダウンロードしてVercel Blobに保存
+      const blobFile = await downloadAndStoreSlackFile(file);
+      
+      // 2. Vercel BlobからダウンロードしてGitHubにアップロード
+      const result = await uploadBlobFileToGitHub(
+        {
+          url: blobFile.url,
+          filename: blobFile.filename,
+          mimetype: blobFile.mimetype,
+        },
+        issueNumber
+      );
+
+      if ("url" in result) {
+        uploadedFiles.push({
+          filename: result.filename,
+          url: result.url,
+          isImage: result.isImage,
+        });
+      } else {
+        uploadErrors.push({
+          filename: result.filename,
+          reason: result.reason,
+        });
+      }
     } catch (e) {
-      console.error("file upload failed", file.name, e);
+      const filename = file.name || "unknown";
+      uploadErrors.push({
+        filename,
+        reason: e instanceof Error ? e.message : "Unknown error",
+      });
+      console.error("file upload failed", filename, e);
     }
   }
 
@@ -103,6 +136,7 @@ async function handleSubmit(payload: any) {
     user: meta.user,
     channel: meta.channel,
     attachments: formatAttachments(uploadedFiles),
+    errors: uploadErrors,
   });
 
   await postIssueComment(issueNumber, body);
@@ -113,16 +147,29 @@ function formatIssueComment({
   user,
   channel,
   attachments,
+  errors,
 }: {
   text: string;
   user: string;
   channel: string;
   attachments: string;
+  errors?: Array<{ filename: string; reason: string }>;
 }) {
   const quoted = text
     .split("\n")
     .map((l) => `> ${l}`)
     .join("\n");
+
+  let errorSection = "";
+  if (errors && errors.length > 0) {
+    const errorLines = errors.map(
+      (e) => `- \`${e.filename}\`: ${e.reason}`
+    );
+    errorSection = `
+### ⚠️ アップロードできなかったファイル
+${errorLines.join("\n")}
+`;
+  }
 
   return `
 ## Slackから共有 🧵
@@ -132,5 +179,6 @@ function formatIssueComment({
 
 ${quoted || "> （本文なし）"}
 ${attachments}
+${errorSection}
 `.trim();
 }
