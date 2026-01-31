@@ -69,14 +69,32 @@ export async function downloadSlackFile(
   console.log(`[A6] downloadSlackFile: ダウンロードURLを取得 - ${downloadUrl.substring(0, 50)}...`);
 
   console.log("[A7] downloadSlackFile: fetchリクエストを開始");
-  const res = await fetch(downloadUrl, {
-    headers: {
-      Authorization: `Bearer ${botToken}`,
-      "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
-    },
-    redirect: "follow",
-  });
-  console.log(`[A8] downloadSlackFile: fetchリクエスト完了 - status: ${res.status}`);
+  
+  // タイムアウト設定（30秒）
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, 30000);
+  
+  let res: Response;
+  try {
+    res = await fetch(downloadUrl, {
+      headers: {
+        Authorization: `Bearer ${botToken}`,
+        "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+      },
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    console.log(`[A8] downloadSlackFile: fetchリクエスト完了 - status: ${res.status}`);
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("Slack download timeout: Request took longer than 30 seconds");
+    }
+    throw new Error(`Slack download failed: ${error instanceof Error ? error.message : "Unknown error"}`);
+  }
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => "");
@@ -93,11 +111,34 @@ export async function downloadSlackFile(
 
   console.log("[A10] downloadSlackFile: ストリーム読み込みを開始");
   const chunks: Buffer[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const stream = Readable.fromWeb(res.body as any);
+  
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stream = Readable.fromWeb(res.body as any);
+    
+    // ストリーム読み込みタイムアウト（60秒）
+    let streamTimeoutId: NodeJS.Timeout | null = null;
+    const resetTimeout = () => {
+      if (streamTimeoutId) {
+        clearTimeout(streamTimeoutId);
+      }
+      streamTimeoutId = setTimeout(() => {
+        stream.destroy(new Error("Stream read timeout: No data received for 60 seconds"));
+      }, 60000);
+    };
+    
+    resetTimeout();
 
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    for await (const chunk of stream) {
+      resetTimeout();
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    
+    if (streamTimeoutId) {
+      clearTimeout(streamTimeoutId);
+    }
+  } catch (error) {
+    throw new Error(`Stream read failed: ${error instanceof Error ? error.message : "Unknown error"}`);
   }
 
   const buffer = Buffer.concat(chunks);
