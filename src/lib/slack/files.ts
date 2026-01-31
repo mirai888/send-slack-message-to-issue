@@ -1,4 +1,5 @@
 import { put } from "@vercel/blob";
+import { callSlackApi } from "./slackApi";
 
 interface SlackFile {
   id?: string;
@@ -25,24 +26,42 @@ export async function downloadAndStoreSlackFile(
     throw new Error(`No file ID for: ${filename}`);
   }
 
-  // payloadから取得したURLを直接使用
-  // files.info APIは呼び出し方法が複雑なため、payloadに含まれる情報を使用
-  const downloadUrl = file.url_private_download ?? file.url_private;
-  const finalMimetype = mimetype;
+  // files.getURL APIを使って一時的なダウンロードURLを取得
+  let downloadUrl: string;
+  let finalMimetype = mimetype;
 
-  if (!downloadUrl) {
-    throw new Error(`No download URL for file: ${filename}`);
+  try {
+    console.log(`[Slack File] Getting temporary URL for file ID: ${file.id}`);
+    const result = await callSlackApi("files.getURL", {
+      file: file.id,
+    });
+
+    downloadUrl = result.file?.url_private_download ?? result.url;
+    finalMimetype = result.file?.mimetype ?? mimetype;
+
+    if (!downloadUrl) {
+      throw new Error(`No download URL from files.getURL`);
+    }
+
+    console.log(`[Slack File] Got temporary URL from files.getURL: ${downloadUrl.substring(0, 50)}...`);
+  } catch (e) {
+    console.error(`[Slack File] files.getURL failed:`, e);
+    // フォールバック: payloadから取得したURLを使用
+    downloadUrl = file.url_private_download ?? file.url_private ?? "";
+    if (!downloadUrl) {
+      throw new Error(`No download URL for file: ${filename}`);
+    }
+    console.log(`[Slack File] Falling back to URL from payload: ${downloadUrl.substring(0, 50)}...`);
   }
-
-  console.log(`[Slack File] Using URL from payload: ${downloadUrl.substring(0, 50)}...`);
 
   console.log(`[Slack File] Downloading: ${filename} from ${downloadUrl.substring(0, 50)}...`);
 
   // SlackのプライベートファイルURLにアクセスするには、Bot Tokenが必要
-  // redirect: 'follow' を指定してリダイレクトを追跡
+  // User-Agentヘッダーを追加してブラウザとして認識させる
   const res = await fetch(downloadUrl, {
     headers: {
       Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`,
+      "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
     },
     redirect: 'follow',
   });
