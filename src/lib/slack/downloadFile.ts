@@ -76,30 +76,70 @@ export async function downloadSlackFile(
 
   // リダイレクトを追跡し、User-Agentヘッダーを追加
   // Serverless環境でのタイムアウト対策として、AbortControllerを使用
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
+  // タイムアウト時間を60秒に延長（PDFなどの大きいファイルに対応）
+  let controller = new AbortController();
+  let timeoutId = setTimeout(() => {
     controller.abort();
-  }, 30000); // 30秒でタイムアウト
+  }, 60000); // 60秒でタイムアウト
 
-  let res: Response;
-  try {
-    res = await fetch(downloadUrl, {
-      headers: {
-        Authorization: authHeader,
-        "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
-      },
-      redirect: "follow",
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    console.info(`[Slack Download] Fetch completed for ${filename}, status: ${res.status}`);
-  } catch (error) {
-    clearTimeout(timeoutId);
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Slack download timeout after 30 seconds for ${filename}`);
+  let res: Response | undefined;
+  let retryCount = 0;
+  const maxRetries = 2;
+
+  while (retryCount <= maxRetries) {
+    try {
+      if (retryCount > 0) {
+        console.info(`[Slack Download] Retry attempt ${retryCount} for ${filename}`);
+        // リトライ前に少し待機
+        await new Promise((resolve) => setTimeout(resolve, 1000 * retryCount));
+      }
+
+      res = await fetch(downloadUrl, {
+        headers: {
+          Authorization: authHeader,
+          "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+        },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      console.info(`[Slack Download] Fetch completed for ${filename}, status: ${res.status}`);
+      break; // 成功したらループを抜ける
+    } catch (error) {
+      clearTimeout(timeoutId);
+      
+      if (error instanceof Error && error.name === "AbortError") {
+        if (retryCount < maxRetries) {
+          retryCount++;
+          console.warn(`[Slack Download] Timeout for ${filename}, retrying... (${retryCount}/${maxRetries})`);
+          // 新しいタイムアウトを設定
+          controller = new AbortController();
+          timeoutId = setTimeout(() => {
+            controller.abort();
+          }, 60000);
+          continue; // リトライ
+        }
+        throw new Error(`Slack download timeout after 60 seconds for ${filename} (retried ${retryCount} times)`);
+      }
+      
+      if (retryCount < maxRetries) {
+        retryCount++;
+        console.warn(`[Slack Download] Fetch failed for ${filename}, retrying... (${retryCount}/${maxRetries}):`, error);
+        // 新しいタイムアウトを設定
+        controller = new AbortController();
+        timeoutId = setTimeout(() => {
+          controller.abort();
+        }, 60000);
+        continue; // リトライ
+      }
+      
+      console.error(`[Slack Download] Fetch failed for ${filename} after ${retryCount} retries:`, error);
+      throw error;
     }
-    console.error(`[Slack Download] Fetch failed for ${filename}:`, error);
-    throw error;
+  }
+
+  if (!res) {
+    throw new Error(`Failed to fetch ${filename} after ${maxRetries} retries`);
   }
 
   if (!res.ok || !res.body) {
@@ -140,6 +180,7 @@ export async function downloadSlackFile(
 
   // ストリーム読み込み（arrayBuffer()はPDFなどの大きめバイナリで詰まるため使用しない）
   const chunks: Buffer[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const stream = Readable.fromWeb(res.body as any);
 
   for await (const chunk of stream) {
