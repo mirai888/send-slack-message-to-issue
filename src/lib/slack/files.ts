@@ -66,11 +66,12 @@ export async function downloadAndStoreSlackFile(
   console.log(`[Slack File] Downloading: ${filename} from ${downloadUrl.substring(0, 50)}...`);
 
   // SlackのプライベートファイルURLにアクセスするには、Bot Tokenが必要
-  // ただし、URLの形式が正しくないとHTMLが返ってくる
+  // redirect: 'follow' を指定してリダイレクトを追跡
   const res = await fetch(downloadUrl, {
     headers: {
       Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}`,
     },
+    redirect: 'follow',
   });
 
   console.log(`[Slack File] Response status: ${res.status}, content-type: ${res.headers.get("content-type")}`);
