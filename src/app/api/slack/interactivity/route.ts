@@ -39,12 +39,44 @@ export async function POST(req: Request) {
 /* ---------- handlers ---------- */
 
 async function openIssueSelectModal(payload: any) {
+  // private_metadataは3000文字制限があるため、ファイル情報を最小限に絞る
+  const files = (payload.message.files ?? []).map((file: any) => ({
+    id: file.id,
+    name: file.name,
+    url_private_download: file.url_private_download,
+    mimetype: file.mimetype,
+  }));
+
   const meta = {
     text: payload.message.text ?? "",
     user: payload.user.username ?? payload.user.id,
     channel: payload.channel.name ?? payload.channel.id,
-    files: payload.message.files ?? [],
+    files,
   };
+
+  const metadataString = JSON.stringify(meta);
+  
+  // 3000文字制限をチェック（安全マージンとして2900文字に制限）
+  if (metadataString.length > 2900) {
+    console.warn(
+      `[Slack API] private_metadataが大きすぎます: ${metadataString.length}文字。ファイル情報を削減します。`
+    );
+    // ファイル情報をさらに削減（idとnameのみ）
+    const minimalFiles = files.map((file: any) => ({
+      id: file.id,
+      name: file.name,
+    }));
+    meta.files = minimalFiles;
+    
+    // それでも大きい場合は、ファイル情報を空にする（後でfiles.info APIで取得）
+    const minimalMetadataString = JSON.stringify(meta);
+    if (minimalMetadataString.length > 2900) {
+      console.warn(
+        `[Slack API] 最小限のファイル情報でも大きすぎます。ファイル情報を空にします。`
+      );
+      meta.files = [];
+    }
+  }
 
   await callSlackApi("views.open", {
     trigger_id: payload.trigger_id,
@@ -95,9 +127,30 @@ async function handleSubmit(payload: any) {
   }> = [];
 
   for (const file of slackFiles) {
+    // ファイル情報が不完全な場合（IDのみの場合）、files.info APIで情報を取得
+    let fileInfo = file;
+    if (file.id && (!file.url_private_download || !file.mimetype)) {
+      try {
+        const fileResponse = await callSlackApi("files.info", { file: file.id });
+        fileInfo = {
+          id: file.id,
+          name: fileResponse.file.name ?? file.name,
+          url_private_download: fileResponse.file.url_private_download,
+          mimetype: fileResponse.file.mimetype ?? file.mimetype,
+        };
+      } catch (e) {
+        const filename = file.name || file.id || "unknown";
+        uploadErrors.push({
+          filename,
+          reason: e instanceof Error ? e.message : "ファイル情報の取得に失敗しました",
+        });
+        console.error("files.info failed", filename, e);
+        continue;
+      }
+    }
     try {
       // 1. SlackからダウンロードしてVercel Blobに保存
-      const blobFile = await downloadAndStoreSlackFile(file);
+      const blobFile = await downloadAndStoreSlackFile(fileInfo);
       
       // 2. Vercel BlobからダウンロードしてGitHubにアップロード
       const result = await uploadBlobFileToGitHub(
@@ -128,7 +181,7 @@ async function handleSubmit(payload: any) {
         await deleteBlobFile(blobFile.url);
       }
     } catch (e) {
-      const filename = file.name || "unknown";
+      const filename = fileInfo.name || file.id || "unknown";
       uploadErrors.push({
         filename,
         reason: e instanceof Error ? e.message : "Unknown error",
