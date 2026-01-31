@@ -72,14 +72,35 @@ export async function downloadSlackFile(
   // Bearer認証が必須（これがないとHTMLが返ってくる）
   const authHeader = `Bearer ${botToken}`;
 
+  console.info(`[Slack Download] Starting fetch request for ${filename}`);
+
   // リダイレクトを追跡し、User-Agentヘッダーを追加
-  const res = await fetch(downloadUrl, {
-    headers: {
-      Authorization: authHeader,
-      "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
-    },
-    redirect: "follow",
-  });
+  // Serverless環境でのタイムアウト対策として、AbortControllerを使用
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, 30000); // 30秒でタイムアウト
+
+  let res: Response;
+  try {
+    res = await fetch(downloadUrl, {
+      headers: {
+        Authorization: authHeader,
+        "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+      },
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    console.info(`[Slack Download] Fetch completed for ${filename}, status: ${res.status}`);
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Slack download timeout after 30 seconds for ${filename}`);
+    }
+    console.error(`[Slack Download] Fetch failed for ${filename}:`, error);
+    throw error;
+  }
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => "");
