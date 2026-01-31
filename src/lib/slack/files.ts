@@ -63,10 +63,13 @@ export async function downloadAndStoreSlackFile(
   const authHeader = `Bearer ${botToken}`;
   console.log(`[Slack File] Authorization header: Bearer ${tokenPrefix}...`);
 
+  // リダイレクトを追跡し、User-Agentヘッダーを追加
   const res = await fetch(downloadUrl, {
     headers: {
       Authorization: authHeader,
+      "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
     },
+    redirect: "follow",
   });
 
   const contentType = res.headers.get("content-type") ?? "";
