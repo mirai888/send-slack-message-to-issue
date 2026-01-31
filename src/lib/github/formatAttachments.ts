@@ -1,17 +1,19 @@
 /**
  * GitHub Issueコメント用の添付ファイルフォーマット
  * 
- * GitHubアセットURL（uploadIssueCommentAsset mutationで取得したURL）を
- * Markdown形式でフォーマットする
+ * アセットリポジトリのraw URLを使ってMarkdown形式でフォーマットする
  * 
- * - 画像: インライン表示（![filename](url)）
- * - PDF/Excel: リンク形式（📄 [filename](url)）
- * - その他: リンク形式（📎 [filename](url)）
+ * - 画像: インライン表示（![filename](rawUrl)）
+ * - PDF/Excel: リンク形式（📄 [filename](rawUrl)）
+ * - その他: リンク形式（📎 [filename](rawUrl)）
+ * 
+ * 参考: https://zenn.dev/optimind/articles/slack-images-and-files-to-github-sync
  */
 
 interface AttachmentFile {
   filename: string;
-  url: string; // GitHubアセットURL（uploadIssueCommentAsset mutationで取得）
+  url: string; // raw URL（画像プレビュー用）
+  repoUrl?: string; // リポジトリ内のファイルURL（オプション）
   mimetype: string;
 }
 

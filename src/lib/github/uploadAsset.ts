@@ -1,22 +1,18 @@
 /**
  * GitHub Issue コメントアセットアップロード処理
  * 
- * SlackファイルをGitHub S3にアップロードし、Issueコメントで使用可能なアセットとして登録
+ * Slackファイルを別のアセットリポジトリにコミットし、Issueコメントで使用可能なアセットとして登録
  * 
  * 処理フロー:
  * 1. Slackファイルをダウンロード
  * 2. ファイルサイズ・種別チェック
- * 3. GitHub S3にPUTリクエストでアップロード
- * 4. uploadIssueCommentAsset mutationでアセットを登録
- * 5. 返されたURLを返す
+ * 3. アセットリポジトリにファイルをコミット（createOrUpdateFileContents）
+ * 4. raw URLを返す（Issueコメントで使用可能）
+ * 
+ * 参考: https://zenn.dev/optimind/articles/slack-images-and-files-to-github-sync
  */
 
 import { downloadSlackFile } from "@/lib/slack/downloadFile";
-import {
-  getRepositoryId,
-  getIssueId,
-  uploadIssueCommentAsset,
-} from "./graphql";
 
 interface SlackFile {
   id?: string;
@@ -29,7 +25,8 @@ interface SlackFile {
 
 export interface UploadedAsset {
   filename: string;
-  url: string;
+  url: string; // raw URL（画像プレビュー用）
+  repoUrl: string; // リポジトリ内のファイルURL
   mimetype: string;
   isImage: boolean;
 }
@@ -65,12 +62,49 @@ function isSupportedFileType(mimetype: string): boolean {
 }
 
 /**
- * ファイルをbase64エンコード
+ * GitHub REST APIでファイルをコミット
  * 
- * GraphQL mutationでファイルデータを渡すためにbase64エンコードする
+ * @param owner - リポジトリオーナー
+ * @param repo - リポジトリ名
+ * @param path - ファイルパス
+ * @param content - base64エンコードされたファイル内容
+ * @param message - コミットメッセージ
  */
-function encodeFileToBase64(buffer: Buffer): string {
-  return buffer.toString("base64");
+async function createOrUpdateFileContents(
+  owner: string,
+  repo: string,
+  path: string,
+  content: string,
+  message: string
+): Promise<void> {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) {
+    throw new Error("GITHUB_TOKEN is not set");
+  }
+
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}`;
+
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github.v3+json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message,
+      content,
+      // 既存ファイルがある場合はshaが必要だが、今回は新規作成のみ
+      // 必要に応じて既存ファイルのshaを取得して更新も可能
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `GitHub API error: ${response.status} ${response.statusText} - ${errorText}`
+    );
+  }
 }
 
 /**
@@ -115,32 +149,50 @@ export async function uploadSlackFileToGitHub(
       };
     }
 
-    // repositoryId / issueId を取得
+    // 環境変数の取得
     const owner = process.env.GITHUB_OWNER!;
-    const repo = process.env.GITHUB_REPO!;
-    const repositoryId = await getRepositoryId(owner, repo);
-    const issueId = await getIssueId(repositoryId, parseInt(issueNumber, 10));
+    const assetsRepo = process.env.GITHUB_ASSETS_REPO || `${process.env.GITHUB_REPO}-assets`;
+    const assetsBranch = process.env.GITHUB_ASSETS_BRANCH || "main";
+
+    if (!owner) {
+      throw new Error("GITHUB_OWNER is not set");
+    }
 
     // ファイルをbase64エンコード
-    // GraphQL mutationでファイルデータを渡すためにbase64エンコードする
-    const fileDataBase64 = encodeFileToBase64(downloaded.buffer);
-    console.log(`[Upload Asset] Encoded ${downloaded.filename} to base64 (${fileDataBase64.length} chars)`);
-
-    // uploadIssueCommentAsset mutationでアセットを登録
-    // このmutationが内部でS3アップロードを処理する
-    console.info(`[GitHub Upload] Starting upload for ${downloaded.filename} (${downloaded.mimetype})`);
-    const finalAssetUrl = await uploadIssueCommentAsset(
-      repositoryId,
-      issueId,
-      fileDataBase64,
-      downloaded.filename,
-      downloaded.mimetype
+    const fileDataBase64 = downloaded.buffer.toString("base64");
+    console.info(
+      `[Upload Asset] Encoded ${downloaded.filename} to base64 (${fileDataBase64.length} chars)`
     );
-    console.info(`[GitHub Upload] Upload completed for ${downloaded.filename}, URL: ${finalAssetUrl}`);
+
+    // ファイルパスの生成（重複を避けるためランダムプレフィックスを追加）
+    const randomPrefix = Math.random().toString(36).slice(-8);
+    const timestamp = Date.now();
+    const path = `slack_files/${issueNumber}/${timestamp}_${randomPrefix}_${downloaded.filename}`;
+
+    // アセットリポジトリにファイルをコミット
+    console.info(
+      `[GitHub Upload] Starting upload for ${downloaded.filename} (${downloaded.mimetype}) to ${owner}/${assetsRepo}`
+    );
+    await createOrUpdateFileContents(
+      owner,
+      assetsRepo,
+      path,
+      fileDataBase64,
+      `Add file ${downloaded.filename} for issue #${issueNumber}`
+    );
+
+    // raw URLとリポジトリURLを生成
+    const repoUrl = `https://github.com/${owner}/${assetsRepo}/blob/${assetsBranch}/${encodeURIComponent(path)}`;
+    const previewUrl = `https://github.com/${owner}/${assetsRepo}/raw/${assetsBranch}/${encodeURIComponent(path)}`;
+
+    console.info(
+      `[GitHub Upload] Upload completed for ${downloaded.filename}, URL: ${previewUrl}`
+    );
 
     return {
       filename: downloaded.filename,
-      url: finalAssetUrl,
+      url: previewUrl, // 画像プレビュー用（raw URL）
+      repoUrl, // リポジトリ内のファイルURL
       mimetype: downloaded.mimetype,
       isImage: downloaded.mimetype.startsWith("image/"),
     };
