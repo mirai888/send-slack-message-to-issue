@@ -71,32 +71,44 @@ export async function downloadSlackFile(
   console.log("[A7] downloadSlackFile: fetchリクエストを開始");
   console.log(`[A7-1] downloadSlackFile: ダウンロードURL - ${downloadUrl}`);
   
-  // タイムアウト設定（30秒）
+  // タイムアウト設定（30秒）- Promise.raceを使用してより確実にタイムアウトを実装
+  let timeoutId: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      console.log("[A7-TIMEOUT] downloadSlackFile: タイムアウト発生（30秒経過）");
+      reject(new Error("Slack download timeout: Request took longer than 30 seconds"));
+    }, 30000);
+  });
+  
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    console.log("[A7-TIMEOUT] downloadSlackFile: タイムアウト発生（30秒経過）");
-    controller.abort();
-  }, 30000);
+  const fetchPromise = fetch(downloadUrl, {
+    headers: {
+      Authorization: `Bearer ${botToken}`,
+      "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
+    },
+    redirect: "follow",
+    signal: controller.signal,
+  });
   
   let res: Response;
   try {
     console.log("[A7-2] downloadSlackFile: fetch実行中...");
-    res = await fetch(downloadUrl, {
-      headers: {
-        Authorization: `Bearer ${botToken}`,
-        "User-Agent": "Slackbot 1.0 (+https://api.slack.com/robots)",
-      },
-      redirect: "follow",
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+    res = await Promise.race([fetchPromise, timeoutPromise]);
+    // fetchが完了したらタイムアウトをクリア
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
     console.log(`[A8] downloadSlackFile: fetchリクエスト完了 - status: ${res.status}`);
     console.log(`[A8-1] downloadSlackFile: Response headers - ${JSON.stringify(Object.fromEntries(res.headers.entries()))}`);
   } catch (error) {
-    clearTimeout(timeoutId);
+    // タイムアウトの場合はAbortControllerも中止
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    controller.abort();
     console.log(`[A7-ERROR] downloadSlackFile: エラー発生 - ${error instanceof Error ? error.message : "Unknown error"}`);
     console.log(`[A7-ERROR-2] downloadSlackFile: エラー詳細 - ${error instanceof Error ? error.stack : "No stack trace"}`);
-    if (error instanceof Error && error.name === "AbortError") {
+    if (error instanceof Error && (error.name === "AbortError" || error.message.includes("timeout"))) {
       throw new Error("Slack download timeout: Request took longer than 30 seconds");
     }
     throw new Error(`Slack download failed: ${error instanceof Error ? error.message : "Unknown error"}`);
