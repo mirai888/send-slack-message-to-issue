@@ -128,6 +128,7 @@ export async function uploadSlackFileToGitHub(
 
     // uploadIssueCommentAsset mutationでアセットを登録
     // このmutationが内部でS3アップロードを処理する
+    console.info(`[GitHub Upload] Starting upload for ${downloaded.filename} (${downloaded.mimetype})`);
     const finalAssetUrl = await uploadIssueCommentAsset(
       repositoryId,
       issueId,
@@ -135,6 +136,7 @@ export async function uploadSlackFileToGitHub(
       downloaded.filename,
       downloaded.mimetype
     );
+    console.info(`[GitHub Upload] Upload completed for ${downloaded.filename}, URL: ${finalAssetUrl}`);
 
     return {
       filename: downloaded.filename,

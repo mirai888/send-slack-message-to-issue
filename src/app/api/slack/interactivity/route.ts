@@ -5,6 +5,7 @@ import { formatAttachments } from "@/lib/github/formatAttachments";
 import { uploadSlackFileToGitHub } from "@/lib/github/uploadAsset";
 
 export const runtime = "nodejs";
+export const maxDuration = 60; // 秒（PDF/Excelなどの重いファイル処理に対応）
 
 // Slack Interactivity payload の型定義
 interface SlackFile {
@@ -70,9 +71,10 @@ export async function POST(req: Request) {
   // ② モーダル送信 → Issue投稿
   if (payload.type === "view_submission") {
     // Slackには即レスポンス（3秒制限対応）
-    queueMicrotask(() => {
-      handleSubmit(payload).catch(console.error);
-    });
+    // Promiseを作成して即ACK（queueMicrotaskは使わない - Serverless環境でプロセスが途中で終了するため）
+    handleSubmit(payload)
+      .then(() => console.info("[Submit] Done"))
+      .catch((e) => console.error("[Submit] Failed", e));
 
     return new Response(
       JSON.stringify({ response_action: "clear" }),
