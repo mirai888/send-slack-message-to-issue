@@ -291,6 +291,31 @@ async function handleSubmit(payload: ViewSubmissionPayload) {
   });
 
   await postIssueComment(issueNumber, body);
+
+  // GitHubのissue URLを生成してSlackメッセージに通知を投稿
+  if (meta.channelId && meta.messageTs) {
+    try {
+      const owner = process.env.GITHUB_OWNER;
+      const repo = process.env.GITHUB_REPO;
+      
+      if (owner && repo) {
+        const issueUrl = `https://github.com/${owner}/${repo}/issues/${issueNumber}`;
+        
+        await callSlackApi("chat.postMessage", {
+          channel: meta.channelId,
+          thread_ts: meta.messageTs,
+          text: `${issueUrl} に送信しました`,
+        });
+      } else {
+        console.warn("[Slack通知] GITHUB_OWNERまたはGITHUB_REPOが設定されていません");
+      }
+    } catch (error) {
+      // Slackへの通知投稿が失敗しても、issueへの投稿は成功しているため、エラーをログに記録するだけ
+      console.error("[Slack通知] メッセージへの通知投稿に失敗しました:", error);
+    }
+  } else {
+    console.warn("[Slack通知] channelIdまたはmessageTsが存在しないため、通知をスキップします");
+  }
 }
 
 function formatIssueComment({
