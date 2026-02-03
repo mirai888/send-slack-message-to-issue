@@ -54,6 +54,7 @@ interface ViewSubmissionPayload {
   };
 }
 
+
 type SlackPayload = MessageActionPayload | ViewSubmissionPayload | { type: string };
 
 export async function POST(req: Request) {
