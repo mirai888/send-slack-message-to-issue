@@ -2,7 +2,7 @@ import { verifySlackRequest } from "@/lib/slack/verify";
 import { callSlackApi } from "@/lib/slack/slackApi";
 import { downloadAndStoreSlackFile, deleteBlobFile } from "@/lib/slack/files";
 import { uploadBlobFileToGitHub } from "@/lib/github/uploadAsset";
-import { postIssueComment } from "@/lib/github/issue";
+import { postIssueComment, getIssue } from "@/lib/github/issue";
 import { formatAttachments } from "@/lib/github/formatAttachments";
 
 export const runtime = "nodejs";
@@ -300,12 +300,22 @@ async function handleSubmit(payload: ViewSubmissionPayload) {
       const repo = process.env.GITHUB_REPO;
       
       if (owner && repo) {
-        const issueUrl = `https://github.com/${owner}/${repo}/issues/${issueNumber}`;
+        // issue情報を取得してタイトルを含める
+        let notificationText = "";
+        try {
+          const issue = await getIssue(issueNumber);
+          notificationText = `<${issue.url}|#${issue.number} ${issue.title}> に送信しました`;
+        } catch (error) {
+          // issue情報の取得に失敗した場合は、URLのみを使用
+          console.warn("[Slack通知] issue情報の取得に失敗しました:", error);
+          const issueUrl = `https://github.com/${owner}/${repo}/issues/${issueNumber}`;
+          notificationText = `${issueUrl} に送信しました`;
+        }
         
         await callSlackApi("chat.postMessage", {
           channel: meta.channelId,
           thread_ts: meta.messageTs,
-          text: `${issueUrl} に送信しました`,
+          text: notificationText,
         });
       } else {
         console.warn("[Slack通知] GITHUB_OWNERまたはGITHUB_REPOが設定されていません");

@@ -1,3 +1,34 @@
+export async function getIssue(issueNumber: string) {
+  const owner = process.env.GITHUB_OWNER;
+  const repo = process.env.GITHUB_REPO;
+  const token = process.env.GITHUB_TOKEN;
+
+  if (!owner || !repo || !token) {
+    throw new Error("GITHUB_OWNER, GITHUB_REPO, or GITHUB_TOKEN is not set");
+  }
+
+  const url = `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}`;
+
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to get issue: ${res.status} ${text}`);
+  }
+
+  const result = await res.json();
+  return {
+    number: result.number,
+    title: result.title,
+    url: result.html_url,
+  };
+}
+
 export async function postIssueComment(
   issueNumber: string,
   body: string
