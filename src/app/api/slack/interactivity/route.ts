@@ -72,7 +72,6 @@ export async function POST(req: Request) {
     return new Response("", { status: 200 });
   }
 
-
   // ② モーダル送信 → Issue投稿
   if (payload.type === "view_submission") {
     try {
